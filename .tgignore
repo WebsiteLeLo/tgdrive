@@ -1,9 +1,20 @@
+# Environments & Secrets
+.env
+*.env.local
+.deploy.env
+
+# Local VPS Deployment Script (Personal server details)
+deploy.sh
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 venv/
-.env
+
+# Telegram Sessions
+*.session
+*.session-journal
 
 # Database
 *.db
