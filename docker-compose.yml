@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  tg-drive:
+    build: .
+    container_name: tg-drive
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3005}:${PORT:-3005}"
+    env_file:
+      - .env
+    volumes:
+      - ./drive.db:/app/drive.db

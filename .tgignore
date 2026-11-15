@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+
+# Database
+*.db
+*.db-journal
+
+# TG-Drive CLI Local Index
+.tgdrive/
+
+# System
+.DS_Store

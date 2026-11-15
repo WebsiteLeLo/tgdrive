@@ -1,0 +1,28 @@
+#!/bin/bash
+# ========================================================
+# TG Cloud Drive - Automated VPS Deployment Script
+# ========================================================
+set -e
+
+# Configuration (Customize with your own VPS details or export as environment variables)
+VPS_USER="${VPS_USER:-root}"
+VPS_HOST="${VPS_HOST:-your-vps-ip}"
+VPS_PORT="${VPS_PORT:-22}"
+VPS_REMOTE_DIR="${VPS_REMOTE_DIR:-/root/tg-drive/}"
+DOMAIN="${DOMAIN:-https://your-domain.com}"
+
+echo "🚀 Uploading files to VPS ($VPS_HOST:$VPS_PORT)..."
+rsync -avz -e "ssh -p $VPS_PORT" \
+  --exclude 'venv' \
+  --exclude '.git' \
+  --exclude '.tgdrive' \
+  --exclude 'drive.db' \
+  --exclude 'drive.db-journal' \
+  --exclude '.env' \
+  --exclude '__pycache__' \
+  ./ "$VPS_USER@$VPS_HOST:$VPS_REMOTE_DIR"
+
+echo "🔄 Restarting application via PM2 on remote VPS..."
+ssh -p "$VPS_PORT" "$VPS_USER@$VPS_HOST" "pm2 restart tg-drive || pm2 start main.py --name tg-drive --interpreter ./venv/bin/python"
+
+echo "✅ Deployment successful! Your drive is live at $DOMAIN"

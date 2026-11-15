@@ -1,0 +1,36 @@
+# Environments & Secrets
+.env
+*.env.local
+.deploy.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+ENV/
+
+# Telegram Sessions
+*.session
+*.session-journal
+
+# SQLite Database
+*.db
+*.db-journal
+
+# TG-Drive CLI Local Tracking State
+.tgdrive/
+
+# Personal VPS Deployment Script (Use deploy.sh.example for public repo)
+deploy.sh
+
+# Logs
+*.log
+logs/
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

@@ -1,0 +1,641 @@
+#!/usr/bin/env python3
+"""
+TG-Drive CLI — Git-like CLI for Telegram Cloud Drive
+Upload, sync, and deploy files to your TG-Drive from any terminal.
+"""
+
+import sys
+import os
+import json
+import urllib.request
+import urllib.parse
+import urllib.error
+import mimetypes
+import fnmatch
+from pathlib import Path
+
+GLOBAL_CONFIG_DIR = Path.home() / ".tgdrive"
+GLOBAL_CONFIG_FILE = GLOBAL_CONFIG_DIR / "config.json"
+LOCAL_CONFIG_DIR = Path(".tgdrive")
+LOCAL_CONFIG_FILE = LOCAL_CONFIG_DIR / "config.json"
+INDEX_FILE = LOCAL_CONFIG_DIR / "index.json"
+
+DEFAULT_IGNORES = [
+    ".git", ".git/*",
+    ".tgdrive", ".tgdrive/*",
+    "node_modules", "node_modules/*",
+    "venv", "venv/*",
+    "__pycache__", "__pycache__/*", "*.pyc",
+    ".env", ".DS_Store"
+]
+
+# ANSI Colors
+class C:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    BLUE = "\033[38;5;39m"
+    CYAN = "\033[38;5;45m"
+    GREEN = "\033[38;5;42m"
+    YELLOW = "\033[38;5;220m"
+    RED = "\033[38;5;203m"
+    PURPLE = "\033[38;5;141m"
+
+def log_info(msg): print(f"{C.BLUE}ℹ{C.RESET} {msg}")
+def log_success(msg): print(f"{C.GREEN}✔{C.RESET} {msg}")
+def log_warn(msg): print(f"{C.YELLOW}⚠{C.RESET} {msg}")
+def log_error(msg): print(f"{C.RED}✖{C.RESET} {msg}")
+
+def load_global_config():
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"remote": "http://localhost:3005", "auth_key": ""}
+
+def save_global_config(cfg):
+    GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+def load_local_config():
+    if LOCAL_CONFIG_FILE.exists():
+        try:
+            with open(LOCAL_CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_local_config(cfg):
+    LOCAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(LOCAL_CONFIG_FILE, "w") as f:
+        json.dump(cfg, f, indent=2)
+
+def get_context():
+    g_cfg = load_global_config()
+    l_cfg = load_local_config()
+    remote = l_cfg.get("remote") or g_cfg.get("remote") or "http://localhost:3005"
+    auth_key = l_cfg.get("auth_key") or g_cfg.get("auth_key") or ""
+    folder = l_cfg.get("folder") or "/"
+    return {"remote": remote.rstrip("/"), "auth_key": auth_key, "folder": folder}
+
+def format_bytes(b):
+    if not b or b == 0:
+        return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if b < 1024.0:
+            return f"{b:.1f} {unit}"
+        b /= 1024.0
+    return f"{b:.1f} PB"
+
+def should_ignore(rel_path, extra_ignores=None):
+    ignores = list(DEFAULT_IGNORES)
+    if Path(".tgignore").exists():
+        try:
+            with open(".tgignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        ignores.append(line)
+        except Exception:
+            pass
+    elif Path(".gitignore").exists():
+        try:
+            with open(".gitignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        ignores.append(line)
+        except Exception:
+            pass
+
+    if extra_ignores:
+        ignores.extend(extra_ignores)
+
+    rel_norm = rel_path.replace("\\", "/")
+    for pattern in ignores:
+        pattern = pattern.rstrip("/")
+        if fnmatch.fnmatch(rel_norm, pattern) or fnmatch.fnmatch(os.path.basename(rel_norm), pattern):
+            return True
+        if fnmatch.fnmatch(rel_norm, f"{pattern}/*"):
+            return True
+    return False
+
+# Multipart file upload without external dependencies
+def upload_file_http(remote, auth_key, file_path, target_folder):
+    url = f"{remote}/api/upload"
+    boundary = "----TGCloudDriveBoundary" + os.urandom(16).hex()
+    
+    file_name = os.path.basename(file_path)
+    mime_type = mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+    file_size = os.path.getsize(file_path)
+
+    # Encode multipart body
+    header_parts = []
+    # Folder field
+    header_parts.append(f"--{boundary}\r\nContent-Disposition: form-data; name=\"folder\"\r\n\r\n{target_folder}\r\n")
+    # File field header
+    header_parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{file_name}\"\r\nContent-Type: {mime_type}\r\n\r\n"
+    )
+    footer_part = f"\r\n--{boundary}--\r\n"
+
+    header_bytes = "".join(header_parts).encode("utf-8")
+    footer_bytes = footer_part.encode("utf-8")
+    total_length = len(header_bytes) + file_size + len(footer_bytes)
+
+    class UploadStream:
+        def __init__(self, fpath):
+            self.fpath = fpath
+            self.file = open(fpath, "rb")
+            self.stage = 0  # 0: header, 1: file, 2: footer, 3: done
+            self.sent = 0
+            self.total = total_length
+
+        def read(self, size=65536):
+            if self.stage == 0:
+                self.stage = 1
+                return header_bytes
+            elif self.stage == 1:
+                chunk = self.file.read(size)
+                if not chunk:
+                    self.stage = 2
+                    self.file.close()
+                    return footer_bytes
+                self.sent += len(chunk)
+                pct = int((self.sent / file_size) * 100) if file_size else 100
+                bar = "#" * (pct // 5) + "-" * (20 - (pct // 5))
+                sys.stdout.write(f"\r  {C.CYAN}↑{C.RESET} {file_name[:26]:<26} [{bar}] {pct:>3}% ({format_bytes(self.sent)}/{format_bytes(file_size)})")
+                sys.stdout.flush()
+                return chunk
+            elif self.stage == 2:
+                self.stage = 3
+                return b""
+            return b""
+
+        def __len__(self):
+            return total_length
+
+    stream = UploadStream(file_path)
+    req = urllib.request.Request(url, data=stream)
+    req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    req.add_header("Content-Length", str(total_length))
+    req.add_header("x-auth", auth_key)
+
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            sys.stdout.write(f"\r  {C.GREEN}✔{C.RESET} {file_name[:26]:<26} [####################] 100% {C.DIM}(Sync to TG done){C.RESET}\n")
+            sys.stdout.flush()
+            return data
+    except urllib.error.HTTPError as e:
+        sys.stdout.write("\n")
+        err_msg = e.read().decode("utf-8")
+        log_error(f"Upload failed ({e.code}): {err_msg}")
+        return None
+    except Exception as e:
+        sys.stdout.write("\n")
+        log_error(f"Error uploading {file_name}: {e}")
+        return None
+
+# Commands
+def cmd_remote(args):
+    """Manage remote URL and auth key."""
+    ctx = get_context()
+    if not args or args[0] in ("show", "get"):
+        print(f"{C.BOLD}Remote Configuration:{C.RESET}")
+        print(f"  URL:      {C.CYAN}{ctx['remote']}{C.RESET}")
+        print(f"  Auth Key: {'*' * len(ctx['auth_key']) if ctx['auth_key'] else '(not set)'}")
+        print(f"  Folder:   {C.PURPLE}{ctx['folder']}{C.RESET}")
+        return
+
+    action = args[0]
+    if action in ("set", "add"):
+        if len(args) < 2:
+            print("Usage: tgdrive remote set <url> [auth_key]")
+            return
+        remote_url = args[1].rstrip("/")
+        auth_key = args[2] if len(args) > 2 else ctx["auth_key"]
+        
+        cfg = load_global_config()
+        cfg["remote"] = remote_url
+        if auth_key:
+            cfg["auth_key"] = auth_key
+        save_global_config(cfg)
+        log_success(f"Remote set to {C.CYAN}{remote_url}{C.RESET}")
+        
+        # Test connection
+        test_connection(remote_url, auth_key)
+    else:
+        print(f"Unknown remote action: {action}. Use 'tgdrive remote set <url> [auth_key]'")
+
+def test_connection(remote, auth_key):
+    try:
+        req = urllib.request.Request(f"{remote}/api/files?folder=/", headers={"x-auth": auth_key})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            log_success(f"Connected to TG-Drive successfully! Total files: {data.get('stats', {}).get('total_files', 0)}")
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            log_warn("Connected, but Authentication failed! Please set valid auth_key with 'tgdrive remote set <url> <auth_key>'")
+        else:
+            log_warn(f"Server responded with status {e.code}")
+    except Exception as e:
+        log_error(f"Could not connect to {remote}: {e}")
+
+def cmd_init(args):
+    """Initialize a TG-Drive repo in current folder."""
+    target_folder = args[0] if args else ""
+    if not target_folder:
+        cur_name = os.path.basename(os.path.abspath("."))
+        target_folder = f"/{cur_name}"
+    
+    if not target_folder.startswith("/"):
+        target_folder = "/" + target_folder
+    target_folder = target_folder.rstrip("/") or "/"
+
+    l_cfg = load_local_config()
+    l_cfg["folder"] = target_folder
+    save_local_config(l_cfg)
+
+    # Create empty index
+    if not INDEX_FILE.exists():
+        with open(INDEX_FILE, "w") as f:
+            json.dump([], f)
+
+    log_success(f"Initialized TG-Drive tracking in {C.BOLD}{os.path.abspath('.')}{C.RESET}")
+    print(f"  Target Remote Folder: {C.PURPLE}{target_folder}{C.RESET}")
+    print(f"  Next step: run {C.CYAN}tgdrive push .{C.RESET} or {C.CYAN}tgdrive add <file>{C.RESET}")
+
+def cmd_add(args):
+    """Stage files for push."""
+    if not args:
+        print("Usage: tgdrive add <file_or_dir> or tgdrive add .")
+        return
+
+    staged = []
+    if INDEX_FILE.exists():
+        try:
+            with open(INDEX_FILE) as f:
+                staged = json.load(f)
+        except Exception:
+            staged = []
+
+    staged_set = set(staged)
+    added_count = 0
+
+    for target in args:
+        if target == ".":
+            for root, dirs, files in os.walk("."):
+                # Prune ignored dirs
+                dirs[:] = [d for d in dirs if not should_ignore(os.path.relpath(os.path.join(root, d), "."))]
+                for file in files:
+                    rel = os.path.relpath(os.path.join(root, file), ".")
+                    if not should_ignore(rel):
+                        if rel not in staged_set:
+                            staged_set.add(rel)
+                            added_count += 1
+        elif os.path.isdir(target):
+            for root, dirs, files in os.walk(target):
+                dirs[:] = [d for d in dirs if not should_ignore(os.path.relpath(os.path.join(root, d), "."))]
+                for file in files:
+                    rel = os.path.relpath(os.path.join(root, file), ".")
+                    if not should_ignore(rel):
+                        if rel not in staged_set:
+                            staged_set.add(rel)
+                            added_count += 1
+        elif os.path.isfile(target):
+            rel = os.path.relpath(target, ".")
+            if rel not in staged_set:
+                staged_set.add(rel)
+                added_count += 1
+
+    LOCAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(INDEX_FILE, "w") as f:
+        json.dump(sorted(list(staged_set)), f, indent=2)
+
+    log_success(f"Staged {added_count} files for push. Total staged: {len(staged_set)}")
+
+def cmd_status(args):
+    """Show staged files and remote information."""
+    ctx = get_context()
+    print(f"{C.BOLD}TG-Drive Status:{C.RESET}")
+    print(f"  Remote:        {C.CYAN}{ctx['remote']}{C.RESET}")
+    print(f"  Target Folder: {C.PURPLE}{ctx['folder']}{C.RESET}\n")
+
+    staged = []
+    if INDEX_FILE.exists():
+        try:
+            with open(INDEX_FILE) as f:
+                staged = json.load(f)
+        except Exception:
+            pass
+
+    if staged:
+        print(f"{C.GREEN}Changes staged for push ({len(staged)} files):{C.RESET}")
+        for s in staged[:20]:
+            print(f"  {C.GREEN}+{C.RESET} {s}")
+        if len(staged) > 20:
+            print(f"  ... and {len(staged) - 20} more files")
+        print(f"\nRun {C.CYAN}tgdrive push{C.RESET} to upload to Telegram Cloud.")
+    else:
+        print(f"{C.DIM}No files staged. Use 'tgdrive add .' or 'tgdrive push <file_or_dir>'{C.RESET}")
+
+def cmd_push(args):
+    """Push/Upload files to TG-Drive."""
+    ctx = get_context()
+    remote = ctx["remote"]
+    auth_key = ctx["auth_key"]
+    base_folder = ctx["folder"]
+
+    # Check for custom folder flag -f or --folder
+    custom_folder = None
+    clean_args = []
+    i = 0
+    while i < len(args):
+        if args[i] in ("-f", "--folder") and i + 1 < len(args):
+            custom_folder = args[i + 1]
+            i += 2
+        else:
+            clean_args.append(args[i])
+            i += 1
+
+    if custom_folder:
+        base_folder = custom_folder if custom_folder.startswith("/") else "/" + custom_folder
+        base_folder = base_folder.rstrip("/") or "/"
+
+    files_to_push = []
+    staged = []
+    if INDEX_FILE.exists():
+        try:
+            with open(INDEX_FILE) as f:
+                staged = json.load(f)
+        except Exception:
+            pass
+
+    if clean_args:
+        # Push specified files/dirs directly
+        for target in clean_args:
+            if target == ".":
+                for root, dirs, files in os.walk("."):
+                    dirs[:] = [d for d in dirs if not should_ignore(os.path.relpath(os.path.join(root, d), "."))]
+                    for file in files:
+                        rel = os.path.relpath(os.path.join(root, file), ".")
+                        if not should_ignore(rel):
+                            files_to_push.append(rel)
+            elif os.path.isdir(target):
+                for root, dirs, files in os.walk(target):
+                    dirs[:] = [d for d in dirs if not should_ignore(os.path.relpath(os.path.join(root, d), "."))]
+                    for file in files:
+                        rel = os.path.relpath(os.path.join(root, file), ".")
+                        if not should_ignore(rel):
+                            files_to_push.append(rel)
+            elif os.path.isfile(target):
+                files_to_push.append(os.path.relpath(target, "."))
+    elif staged:
+        files_to_push = [s for s in staged if os.path.isfile(s)]
+    else:
+        # Default to all untracked in current directory
+        log_info("No files staged. Scanning current directory...")
+        for root, dirs, files in os.walk("."):
+            dirs[:] = [d for d in dirs if not should_ignore(os.path.relpath(os.path.join(root, d), "."))]
+            for file in files:
+                rel = os.path.relpath(os.path.join(root, file), ".")
+                if not should_ignore(rel):
+                    files_to_push.append(rel)
+
+    if not files_to_push:
+        log_warn("No files found to push.")
+        return
+
+    # Calculate total size
+    total_bytes = sum(os.path.getsize(f) for f in files_to_push if os.path.isfile(f))
+    print(f"\n{C.BOLD}Pushing {len(files_to_push)} files ({format_bytes(total_bytes)}) to:{C.RESET}")
+    print(f"  Remote: {C.CYAN}{remote}{C.RESET}")
+    print(f"  Target: {C.PURPLE}{base_folder}{C.RESET}\n")
+
+    success_count = 0
+    for rel_file in files_to_push:
+        if not os.path.isfile(rel_file):
+            continue
+        
+        # Preserve subfolder hierarchy only if relative subpath within current dir
+        if not os.path.isabs(rel_file) and not rel_file.startswith(".."):
+            sub_dir = os.path.dirname(rel_file)
+            if sub_dir and sub_dir != ".":
+                file_target_folder = base_folder.rstrip("/") + "/" + sub_dir.replace("\\", "/").strip("/")
+            else:
+                file_target_folder = base_folder
+        else:
+            file_target_folder = base_folder
+
+        res = upload_file_http(remote, auth_key, rel_file, file_target_folder)
+        if res:
+            success_count += 1
+
+    # Clear staged index
+    if INDEX_FILE.exists():
+        with open(INDEX_FILE, "w") as f:
+            json.dump([], f)
+
+    print(f"\n{C.GREEN}✔ Push complete! Successfully deployed {success_count}/{len(files_to_push)} files.{C.RESET}")
+
+def cmd_ls(args):
+    """List remote files and folders."""
+    ctx = get_context()
+    target_folder = args[0] if args else ctx["folder"]
+    if not target_folder.startswith("/"):
+        target_folder = "/" + target_folder
+
+    url = f"{ctx['remote']}/api/files?folder={urllib.parse.quote(target_folder)}"
+    req = urllib.request.Request(url, headers={"x-auth": ctx["auth_key"]})
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            print(f"\n{C.BOLD}Directory: {C.PURPLE}{target_folder}{C.RESET} on {C.CYAN}{ctx['remote']}{C.RESET}\n")
+
+            subfolders = data.get("subfolders", [])
+            if subfolders:
+                print(f"{C.YELLOW}Directories:{C.RESET}")
+                for sf in subfolders:
+                    name = sf.split("/")[-1]
+                    print(f"  📁 {C.YELLOW}{name}/{C.RESET}  {C.DIM}({sf}){C.RESET}")
+
+            files = data.get("files", [])
+            if files:
+                print(f"\n{C.CYAN}Files ({len(files)}):{C.RESET}")
+                for f in files:
+                    size_str = format_bytes(f.get("size", 0))
+                    date_str = f.get("created_at", "").split(" ")[0]
+                    fid = f.get("id")
+                    print(f"  📄 {f['name']:<36} {size_str:>10}  {date_str}  {C.DIM}#ID:{fid}{C.RESET}")
+            
+            if not subfolders and not files:
+                print(f"  {C.DIM}(empty folder){C.RESET}")
+            print()
+    except Exception as e:
+        log_error(f"Failed to list remote files: {e}")
+
+def cmd_pull(args):
+    """Download files from remote folder into local directory."""
+    ctx = get_context()
+    remote = ctx["remote"]
+    auth_key = ctx["auth_key"]
+
+    remote_folder = ctx["folder"]
+    local_dest = "."
+
+    if args:
+        if args[0].startswith("/"):
+            remote_folder = args[0]
+            if len(args) > 1:
+                local_dest = args[1]
+        else:
+            local_dest = args[0]
+
+    url = f"{remote}/api/files?folder={urllib.parse.quote(remote_folder)}"
+    req = urllib.request.Request(url, headers={"x-auth": auth_key})
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            files = data.get("files", [])
+            if not files:
+                log_warn(f"No files found in remote folder '{remote_folder}'.")
+                return
+
+            print(f"\n{C.BOLD}Pulling {len(files)} files from {C.PURPLE}{remote_folder}{C.RESET} -> {C.CYAN}{local_dest}{C.RESET}\n")
+            os.makedirs(local_dest, exist_ok=True)
+
+            for f in files:
+                file_name = f["name"]
+                share_token = f.get("share_token", "")
+                mid = f["message_id"]
+                dl_url = f"{remote}/stream/{mid}?token={urllib.parse.quote(share_token)}&dl=1"
+                out_path = os.path.join(local_dest, file_name)
+
+                sys.stdout.write(f"  {C.CYAN}↓{C.RESET} Downloading {file_name}... ")
+                sys.stdout.flush()
+
+                dl_req = urllib.request.Request(dl_url)
+                with urllib.request.urlopen(dl_req, timeout=60) as dl_resp, open(out_path, "wb") as out_f:
+                    while True:
+                        chunk = dl_resp.read(65536)
+                        if not chunk:
+                            break
+                        out_f.write(chunk)
+                sys.stdout.write(f"{C.GREEN}✔ Done ({format_bytes(f['size'])}){C.RESET}\n")
+
+            log_success(f"Pull completed! Files saved to {os.path.abspath(local_dest)}")
+    except Exception as e:
+        log_error(f"Pull failed: {e}")
+
+def cmd_share(args):
+    """Get public shareable link for current or specified folder."""
+    ctx = get_context()
+    target_folder = args[0] if args else ctx["folder"]
+    if not target_folder.startswith("/"):
+        target_folder = "/" + target_folder
+
+    url = f"{ctx['remote']}/api/folders/share-token?path={urllib.parse.quote(target_folder)}"
+    req = urllib.request.Request(url, headers={"x-auth": ctx["auth_key"]})
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            token = data.get("share_token", "")
+            share_url = f"{ctx['remote']}/share/{token}"
+            print(f"\n{C.BOLD}Public Shared Folder Link:{C.RESET}")
+            print(f"  Folder: {C.PURPLE}{target_folder}{C.RESET}")
+            print(f"  URL:    {C.CYAN}{share_url}{C.RESET}")
+            print(f"  {C.DIM}Anyone with this link can view and download all files & subfolders.{C.RESET}\n")
+    except Exception as e:
+        log_error(f"Failed to get share link: {e}")
+
+def cmd_info(args):
+    """Show storage info from remote."""
+    ctx = get_context()
+    url = f"{ctx['remote']}/api/files?folder=/"
+    req = urllib.request.Request(url, headers={"x-auth": ctx["auth_key"]})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            stats = data.get("stats", {})
+            print(f"\n{C.BOLD}TG-Drive Cloud Storage Stats:{C.RESET}")
+            print(f"  Remote:       {C.CYAN}{ctx['remote']}{C.RESET}")
+            print(f"  Total Stored: {C.GREEN}{format_bytes(stats.get('total_size', 0))}{C.RESET}")
+            print(f"  Total Files:  {stats.get('total_files', 0)}")
+            print(f"  Capacity:     {C.PURPLE}Unlimited (Telegram MTProto){C.RESET}\n")
+    except Exception as e:
+        log_error(f"Failed to get info: {e}")
+
+def cmd_help():
+    print(f"""
+{C.BOLD}{C.BLUE}TG-Drive CLI{C.RESET} — Git-like Terminal Client for Telegram Cloud Drive
+
+{C.BOLD}USAGE:{C.RESET}
+  tgdrive <command> [arguments]
+
+{C.BOLD}COMMANDS:{C.RESET}
+  {C.CYAN}remote set <url> [auth_key]{C.RESET}  Set remote TG-Drive VPS endpoint & password
+  {C.CYAN}remote show{C.RESET}                 Show current remote URL and configuration
+  {C.CYAN}init [remote_folder]{C.RESET}        Link current local directory to a remote folder (e.g. /my-project)
+  {C.CYAN}status{C.RESET}                      Show staged files and remote status
+  {C.CYAN}add <file|dir|.>{C.RESET}            Stage files for push (like 'git add .')
+  {C.CYAN}push [paths...] [-f folder]{C.RESET} Upload/deploy staged or specified files to remote TG-Drive
+  {C.CYAN}pull [remote_folder] [dir]{C.RESET}  Download files from TG-Drive to local directory
+  {C.CYAN}ls [remote_folder]{C.RESET}          List files & subfolders on remote drive
+  {C.CYAN}share [remote_folder]{C.RESET}       Get public link for folder (anyone can view & download)
+  {C.CYAN}info{C.RESET}                        Display total storage and file stats
+
+{C.BOLD}EXAMPLES:{C.RESET}
+  # 1. Connect to your VPS server:
+  tgdrive remote set https://your-domain.com YOUR_ADMIN_PASSWORD
+
+  # 2. In any project folder (just like git init):
+  tgdrive init /apps/my-website
+
+  # 3. Stage and push all files:
+  tgdrive add .
+  tgdrive push
+
+  # Or push directly without staging:
+  tgdrive push .
+  tgdrive push myfile.zip -f /backups
+""")
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        cmd_help()
+        sys.exit(0)
+
+    cmd = sys.argv[1]
+    args = sys.argv[2:]
+
+    if cmd == "remote":
+        cmd_remote(args)
+    elif cmd == "init":
+        cmd_init(args)
+    elif cmd == "add":
+        cmd_add(args)
+    elif cmd == "status":
+        cmd_status(args)
+    elif cmd == "push":
+        cmd_push(args)
+    elif cmd == "pull":
+        cmd_pull(args)
+    elif cmd == "ls":
+        cmd_ls(args)
+    elif cmd == "share":
+        cmd_share(args)
+    elif cmd == "info":
+        cmd_info(args)
+    else:
+        log_error(f"Unknown command: '{cmd}'. Run 'tgdrive help' for usage.")
+
+if __name__ == "__main__":
+    main()

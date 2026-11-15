@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram Cloud Drive Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/tg-drive
+ExecStart=/var/www/tg-drive/venv/bin/python main.py
+Restart=always
+RestartSec=3
+EnvironmentFile=/var/www/tg-drive/.env
+
+[Install]
+WantedBy=multi-user.target
