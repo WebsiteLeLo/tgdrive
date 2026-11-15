@@ -1,12 +1,18 @@
 # 🚀 TG Cloud Drive
 
-> **Turn any Telegram Channel into an Unlimited, High-Speed Personal & Team Cloud Storage with a Modern Glassmorphic Web UI, Git-like CLI Client, RFC 7233 Progressive Streaming, and Sandboxed Public Sharing.**
+> **Made by Gourav (Hiroshi)**
+> Turn any Telegram Channel into an Unlimited, High-Speed Personal & Team Cloud Storage with a Modern Glassmorphic Web UI, Git-like CLI Client, RFC 7233 Progressive Streaming, and Sandboxed Public Sharing.
 
+[![Author](https://img.shields.io/badge/Author-Gourav%20(Hiroshi)-blueviolet?style=for-the-badge&logo=github)](https://github.com/WebsiteLeLo)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-drive.pwxstudy.site-2563eb?style=for-the-badge&logo=telegram)](https://drive.pwxstudy.site/share/C2J2O3sSjcFvamocFtw)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
-[![RAM Usage](https://img.shields.io/badge/RAM%20Footprint-%3C60MB-brightgreen?style=for-the-badge)](#-low-resource-vps-architecture)
+
+> [!TIP]
+> **Live Public Folder Demo**: Explore a live shared folder hosted directly on TG Cloud Drive:
+> 👉 **[https://drive.pwxstudy.site/share/C2J2O3sSjcFvamocFtw](https://drive.pwxstudy.site/share/C2J2O3sSjcFvamocFtw)** (Zero login required, instant file & code streaming!)
 
 ---
 
@@ -550,6 +556,13 @@ TG Cloud Drive is engineered to run seamlessly on budget cloud servers ($3–$5/
 * **Cryptographic URL-safe Tokens**: Share tokens are generated with Python `secrets.token_urlsafe(16)` (high entropy).
 * **Directory Traversal Protection**: Folder sharing strictly enforces prefix boundaries. Guests cannot traverse upwards or inspect siblings outside their designated shared folder.
 * **Secret Sanitization**: No sensitive credentials are hardcoded into the source code. All secrets are loaded from environment variables (`.env`).
+
+---
+
+## 👨‍💻 Author & Credits
+
+* **Made by Gourav (Hiroshi)**
+* GitHub: [@WebsiteLeLo](https://github.com/WebsiteLeLo)
 
 ---
 
