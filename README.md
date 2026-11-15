@@ -72,29 +72,29 @@
 
 ```mermaid
 flowchart TD
-    UserWeb["Web Browser\n(Glassmorphic UI / PDF.js)"]
-    UserCLI["Terminal CLI\n(tgdrive client)"]
-    GuestUser["Public Visitor\n(/share/{token} or /f/{token})"]
+    UserWeb["Web Browser<br/>(Glassmorphic UI / PDF.js)"]
+    UserCLI["Terminal CLI<br/>(tgdrive client)"]
+    GuestUser["Public Visitor<br/>(/share/token or /f/token)"]
 
-    subgraph HostServer["Your Server / VPS (50MB RAM Footprint)"]
-        ReverseProxy["Nginx / Caddy\n(SSL Termination & Buffer Bypass)"]
-        FastAPIServer["FastAPI Server (main.py)\nAsync Streaming Engine"]
-        SQLiteDB[("SQLite Database\n(drive.db)\nFile Metadata & Tokens")]
+    subgraph HostServer["Your Server / VPS - 50MB RAM Footprint"]
+        ReverseProxy["Nginx / Caddy<br/>(SSL Termination & Buffer Bypass)"]
+        FastAPIServer["FastAPI Server (main.py)<br/>Async Streaming Engine"]
+        SQLiteDB[("SQLite Database (drive.db)<br/>File Metadata & Tokens")]
     end
 
-    subgraph TelegramCloud["Telegram Infrastructure (Unlimited Storage)"]
-        MTProto["Telegram MTProto API\n(Kurigram + TgCrypto Engine)"]
-        PrivateChannel["Private Storage Channel\n(Encrypted File Chunks)"]
+    subgraph TelegramCloud["Telegram Infrastructure - Unlimited Storage"]
+        MTProto["Telegram MTProto API<br/>(Kurigram + TgCrypto Engine)"]
+        PrivateChannel["Private Storage Channel<br/>(Encrypted File Chunks)"]
     end
 
     UserWeb -->|HTTPS / Range Requests| ReverseProxy
     UserCLI -->|REST API / Token Auth| ReverseProxy
     GuestUser -->|Public Token Access| ReverseProxy
 
-    ReverseProxy -->|Proxy Pass (Port 3005)| FastAPIServer
-    FastAPIServer <-->|Query Metadata & Auth| SQLiteDB
-    FastAPIServer <-->|Stream Byte Chunks On-The-Fly| MTProto
-    MTProto <--> PrivateChannel
+    ReverseProxy -->|Proxy Pass: Port 3005| FastAPIServer
+    FastAPIServer -->|Query Metadata & Auth| SQLiteDB
+    FastAPIServer -->|Stream Byte Chunks On-The-Fly| MTProto
+    MTProto -->|Store File Chunks| PrivateChannel
 ```
 
 ---
@@ -115,7 +115,7 @@ sequenceDiagram
     Server->>TG: Fetch byte range from Telegram Channel
     TG-->>Server: 64KB raw data chunk
     Server-->>Browser: HTTP 206 Partial Content (Content-Range: bytes 0-65535/209715200)
-    Note over Browser: PDF header & xref parsed instantly!<br/>Page 1 renders in <500ms.
+    Note over Browser: PDF header & xref parsed instantly!<br/>Page 1 renders in under 500ms.
 
     Browser->>Server: User scrolls to Page 50 (Range: bytes=15420000-15485535)
     Server->>TG: Fetch specific 64KB page chunk
@@ -130,10 +130,10 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A["Local Files\n(./my-project)"] -->|tgdrive add .| B["Staged State\n(.tgdrive/index)"]
-    B -->|tgdrive push| C["FastAPI Server\n(/api/upload)"]
-    C -->|MTProto Stream| D["Telegram Channel\n(Permanent Storage)"]
-    D -->|tgdrive pull| E["Remote Machine\n(Local Clone)"]
+    A["Local Files<br/>(./my-project)"] -->|tgdrive add .| B["Staged State<br/>(.tgdrive/index)"]
+    B -->|tgdrive push| C["FastAPI Server<br/>(/api/upload)"]
+    C -->|MTProto Stream| D["Telegram Channel<br/>(Permanent Storage)"]
+    D -->|tgdrive pull| E["Remote Machine<br/>(Local Clone)"]
 ```
 
 ---
@@ -142,14 +142,14 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Admin["Drive Owner\n(Authenticated via ADMIN_PASS)"]
-    Admin -->|Click 'Share Folder'| GenToken["Generate Secure URL-safe Token\n(Stored in SQLite)"]
-    GenToken --> PublicLink["Public Link:\nhttps://your-domain.com/share/X9M9zf_ldsibPNrJoTA"]
+    Admin["Drive Owner<br/>(Authenticated via ADMIN_PASS)"]
+    Admin -->|Click 'Share Folder'| GenToken["Generate Secure URL-safe Token<br/>(Stored in SQLite)"]
+    GenToken --> PublicLink["Public Link:<br/>https://your-domain.com/share/token"]
 
-    PublicLink --> Visitor["Public Visitor / Client\n(Zero Login Required)"]
+    PublicLink --> Visitor["Public Visitor / Client<br/>(Zero Login Required)"]
     Visitor --> ScopeCheck{"Path Sandboxing Check"}
-    ScopeCheck -->|Inside Shared Directory Tree| AccessGranted["✔ View, Stream & Download Files"]
-    ScopeCheck -->|Outside Directory / Admin Action| AccessDenied["✖ 403 Forbidden / Traversal Blocked"]
+    ScopeCheck -->|Inside Shared Directory Tree| AccessGranted["Allowed: View, Stream & Download"]
+    ScopeCheck -->|Outside Directory / Admin Action| AccessDenied["Blocked: 403 Forbidden"]
 ```
 
 ---
