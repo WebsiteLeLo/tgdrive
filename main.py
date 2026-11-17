@@ -8,9 +8,11 @@ import tempfile
 import mimetypes
 import asyncio
 import urllib.parse
+import html
+from typing import Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Header, Response
-from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, FileResponse
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, LinkPreviewOptions, CallbackQuery
 from pyrogram.errors import FloodWait
@@ -378,6 +380,113 @@ async def lifespan(app: FastAPI):
     await bot.stop()
 
 app = FastAPI(lifespan=lifespan)
+
+# ========================================================
+# Video / Image Thumbnail Generation & Cache
+# ========================================================
+
+THUMB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache", "thumbnails")
+os.makedirs(THUMB_DIR, exist_ok=True)
+_thumb_locks: dict[int, asyncio.Lock] = {}
+
+async def get_or_create_thumbnail(message_id: int) -> Optional[str]:
+    thumb_path = os.path.join(THUMB_DIR, f"{message_id}.jpg")
+    if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+        return thumb_path
+
+    if message_id not in _thumb_locks:
+        _thumb_locks[message_id] = asyncio.Lock()
+
+    async with _thumb_locks[message_id]:
+        if os.path.exists(thumb_path) and os.path.getsize(thumb_path) > 0:
+            return thumb_path
+
+        # 1. Try Telegram native media thumbnail
+        try:
+            msg = await bot.get_messages(CHANNEL_ID, message_id)
+            if msg and msg.media:
+                media = getattr(msg, msg.media.value)
+                thumbs = getattr(media, "thumbs", None)
+                if not thumbs and getattr(msg, "photo", None):
+                    thumbs = [msg.photo[-1] if isinstance(msg.photo, list) else msg.photo]
+
+                if thumbs:
+                    best_thumb = thumbs[-1]
+                    data = await bot.download_media(best_thumb.file_id, in_memory=True)
+                    if data and hasattr(data, "getvalue") and len(data.getvalue()) > 0:
+                        tmp_path = f"{thumb_path}.tmp.{os.getpid()}"
+                        with open(tmp_path, "wb") as f:
+                            f.write(data.getvalue())
+                        os.replace(tmp_path, thumb_path)
+                        return thumb_path
+        except Exception as e:
+            print(f"[Thumbnail Telegram error] {message_id}: {e}")
+
+        # 2. Try FFmpeg extraction fallback if video
+        if shutil.which("ffmpeg"):
+            try:
+                stream_url = f"http://127.0.0.1:{PORT}/stream/{message_id}?key={ADMIN_PASS}"
+                tmp_path = f"{thumb_path}.tmp.{os.getpid()}.jpg"
+                cmd = [
+                    "ffmpeg", "-y", "-ss", "00:00:02",
+                    "-i", stream_url,
+                    "-vframes", "1",
+                    "-q:v", "3",
+                    tmp_path
+                ]
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=12)
+                if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                    os.replace(tmp_path, thumb_path)
+                    return thumb_path
+            except Exception as e:
+                print(f"[Thumbnail FFmpeg error] {message_id}: {e}")
+
+    return None
+
+@app.api_route("/thumb/{message_id}", methods=["GET", "HEAD"])
+async def serve_file_thumbnail(message_id: int, request: Request, token: str = "", key: str = ""):
+    if key != ADMIN_PASS:
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("SELECT share_token FROM files WHERE message_id = ?", (message_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row or not token or row[0] != token:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    thumb_path = await get_or_create_thumbnail(message_id)
+    if not thumb_path or not os.path.exists(thumb_path):
+        raise HTTPException(status_code=404, detail="Thumbnail not available")
+
+    return FileResponse(
+        thumb_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"}
+    )
+
+@app.api_route("/thumb/f/{token}", methods=["GET", "HEAD"])
+async def serve_file_thumbnail_by_token(token: str):
+    conn = sqlite3.connect("drive.db")
+    c = conn.cursor()
+    c.execute("SELECT message_id FROM files WHERE share_token = ?", (token,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    message_id = row[0]
+    thumb_path = await get_or_create_thumbnail(message_id)
+    if not thumb_path or not os.path.exists(thumb_path):
+        raise HTTPException(status_code=404, detail="Thumbnail not available")
+
+    return FileResponse(
+        thumb_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=604800, immutable"}
+    )
 
 # ========================================================
 # Telegram Bot Interactive PM Handlers & User Isolation
@@ -1371,6 +1480,9 @@ async def process_single_job(job: dict):
     conn.commit()
     conn.close()
 
+    if mime_type.startswith("video/") or mime_type.startswith("image/"):
+        asyncio.create_task(get_or_create_thumbnail(chan_msg.id))
+
     # Build links
     quoted_name = urllib.parse.quote(file_name)
     web_stream_url = f"{BASE_URL}/f/{share_token}"
@@ -1474,6 +1586,8 @@ async def process_batch_job(job: dict):
                 conn.commit()
                 conn.close()
                 processed_files.append({"name": file_name, "size": file_size, "token": share_token})
+                if mime_type.startswith("video/") or mime_type.startswith("image/"):
+                    asyncio.create_task(get_or_create_thumbnail(chan_msg.id))
             except Exception as e:
                 print(f"[process_batch_job db error] {e}")
                 failed_files += 1
@@ -2691,7 +2805,25 @@ async def serve_share_page(token: str):
 @app.get("/f/{token}", response_class=HTMLResponse)
 @app.get("/file/{token}", response_class=HTMLResponse)
 async def serve_file_share_page(token: str):
-    return await serve_ui()
+    conn = sqlite3.connect("drive.db")
+    c = conn.cursor()
+    c.execute("SELECT name, mime_type FROM files WHERE share_token = ?", (token,))
+    row = c.fetchone()
+    conn.close()
+
+    html_content = await serve_ui()
+    if row:
+        file_name, mime_type = row
+        meta_tags = (
+            f'<meta property="og:title" content="{html.escape(file_name)}">\n'
+            f'<meta property="og:type" content="video.other" />\n'
+            f'<meta property="og:image" content="{BASE_URL}/thumb/f/{token}">\n'
+            f'<meta name="twitter:card" content="summary_large_image">\n'
+            f'<meta name="twitter:title" content="{html.escape(file_name)}">\n'
+            f'<meta name="twitter:image" content="{BASE_URL}/thumb/f/{token}">\n'
+        )
+        html_content = html_content.replace("<head>", f"<head>\n{meta_tags}", 1)
+    return HTMLResponse(content=html_content)
 
 if __name__ == "__main__":
     import uvicorn

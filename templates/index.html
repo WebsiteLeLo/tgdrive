@@ -880,6 +880,38 @@
     }
     .card:hover .card-thumb-img { transform: scale(1.05); }
 
+    .card-play-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(15, 23, 42, 0.78);
+      backdrop-filter: blur(4px);
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      opacity: 0.88;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    }
+    .card-play-overlay svg {
+      width: 20px;
+      height: 20px;
+      margin-left: 2px;
+    }
+    .card:hover .card-play-overlay {
+      transform: translate(-50%, -50%) scale(1.15);
+      background: #0284c7;
+      opacity: 1;
+      box-shadow: 0 6px 20px rgba(2, 132, 199, 0.5);
+    }
+
     /* Media Type Badges */
     .media-badge {
       width: 52px;
@@ -2833,7 +2865,8 @@
               <div id="singleVideoHost" style="width:100%; max-width:1150px; height:calc(100vh - 96px); max-height:85vh;"></div>
             </div>
           `;
-          initCustomVideoPlayer(document.getElementById('singleVideoHost'), streamUrl, file.name);
+          const thumbUrl = `/thumb/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
+          initCustomVideoPlayer(document.getElementById('singleVideoHost'), streamUrl, file.name, thumbUrl);
         } else if (typeInfo.isAudio) {
           contentArea.innerHTML = `
             <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:calc(100vh - 64px); padding:20px;">
@@ -3434,9 +3467,10 @@
           const dateStr = f.created_at ? f.created_at.split(' ')[0] : '';
           const isSelected = selectedFileIds.has(f.id);
 
+          const thumbUrl = `/thumb/${f.message_id}?token=${encodeURIComponent(f.share_token)}`;
           let thumbContent = `<div class="media-badge ${typeInfo.cls}" style="width:34px; height:34px; font-size:16px;">${typeInfo.icon}</div>`;
-          if (typeInfo.isImage) {
-            thumbContent = `<div class="list-thumb"><img src="${streamUrl}" loading="lazy" onerror="this.src=''; this.parentElement.innerText='🖼️';"></div>`;
+          if (typeInfo.isImage || typeInfo.isVideo) {
+            thumbContent = `<div class="list-thumb"><img src="${thumbUrl}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"><div class="media-badge ${typeInfo.cls}" style="display:none; width:34px; height:34px; font-size:16px;">${typeInfo.icon}</div></div>`;
           }
 
           return `
@@ -3483,12 +3517,24 @@
         const dateStr = f.created_at ? f.created_at.split(' ')[0] : '';
         const isSelected = selectedFileIds.has(f.id);
 
+        const thumbUrl = `/thumb/${f.message_id}?token=${encodeURIComponent(f.share_token)}`;
         let previewHtml = '';
         if (typeInfo.isImage) {
           previewHtml = `
             <div class="card-preview" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
-              <img class="card-thumb-img" src="${streamUrl}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+              <img class="card-thumb-img" src="${thumbUrl}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
               <div class="media-badge ${typeInfo.cls}" style="display:none; width:48px; height:48px; font-size:24px;">${typeInfo.icon}</div>
+            </div>`;
+        } else if (typeInfo.isVideo) {
+          previewHtml = `
+            <div class="card-preview" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
+              <img class="card-thumb-img" src="${thumbUrl}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+              <div class="media-badge ${typeInfo.cls}" style="display:none; width:48px; height:48px; font-size:24px;">
+                <span>${typeInfo.icon}</span>
+              </div>
+              <div class="card-play-overlay">
+                <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+              </div>
             </div>`;
         } else {
           previewHtml = `
@@ -4049,13 +4095,13 @@
       return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
 
-    function initCustomVideoPlayer(hostEl, streamUrl, fileName) {
+    function initCustomVideoPlayer(hostEl, streamUrl, fileName, posterUrl = '') {
       cleanupCustomVideoPlayer();
       if (!hostEl) return;
 
       const playerHtml = `
         <div class="svp-wrapper" id="svpWrapper" tabindex="0">
-          <video class="svp-video" id="svpVideo" src="${streamUrl}" playsinline preload="metadata" crossorigin="anonymous"></video>
+          <video class="svp-video" id="svpVideo" src="${streamUrl}" poster="${posterUrl || ''}" playsinline preload="metadata" crossorigin="anonymous"></video>
 
           <div class="svp-big-play" id="svpBigPlay">
             <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
@@ -4531,7 +4577,8 @@
         body.innerHTML = `
           <div id="modalVideoHost" style="width:100%; height:72vh; max-height:72vh;"></div>
         `;
-        initCustomVideoPlayer(document.getElementById('modalVideoHost'), streamUrl, file.name);
+        const thumbUrl = `/thumb/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
+        initCustomVideoPlayer(document.getElementById('modalVideoHost'), streamUrl, file.name, thumbUrl);
       } else if (typeInfo.isAudio) {
         body.innerHTML = `
           <div style="background:var(--bg-card); padding:32px; border-radius:var(--radius-lg); width:100%; max-width:540px; text-align:center;">
