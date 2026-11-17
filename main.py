@@ -93,13 +93,152 @@ def get_folder_share_token(path: str) -> str:
     conn.close()
     return token
 
+# ========================================================
+# Boosted Telegram MTProto Upload Engine
+# ========================================================
+import math
+import io
+from hashlib import md5
+import functools
+from pyrogram import raw, StopTransmission
+
+async def boosted_save_file(
+    self: Client,
+    path,
+    file_id: int | None = None,
+    file_part: int = 0,
+    progress=None,
+    progress_args: tuple = (),
+):
+    async with self.save_file_semaphore:
+        if path is None:
+            return None
+
+        failures: list[Exception] = []
+
+        async def worker(session):
+            while True:
+                data = await queue.get()
+                if data is None:
+                    return
+                try:
+                    await session.invoke(data)
+                except Exception as e:
+                    failures.append(e)
+
+        part_size = 512 * 1024
+
+        if isinstance(path, (str, os.PathLike)):
+            fp = open(path, "rb")
+        elif isinstance(path, io.IOBase):
+            fp = path
+        else:
+            raise ValueError("Invalid file. Expected file path or binary pointer")
+
+        file_name = getattr(fp, "name", "file.bin")
+        fp.seek(0, os.SEEK_END)
+        file_size = fp.tell()
+        fp.seek(0)
+
+        if file_size == 0:
+            raise ValueError("File size equals to 0 B")
+
+        file_size_limit_mib = 4000 if (self.me and self.me.is_premium) else 2000
+        if file_size > file_size_limit_mib * 1024 * 1024:
+            raise ValueError(f"Can't upload files bigger than {file_size_limit_mib} MiB")
+
+        file_total_parts = int(math.ceil(file_size / part_size))
+        is_big = file_size > 10 * 1024 * 1024
+        
+        # High-throughput workers: 8 parallel workers for big files, 4 for small files
+        workers_count = min(8, file_total_parts) if is_big else min(4, file_total_parts)
+        is_missing_part = file_id is not None
+        file_id = file_id or self.rnd_id()
+        md5_sum = md5() if not is_big and not is_missing_part else None
+        dc_id = await self.storage.dc_id()
+
+        session = await self.get_session(dc_id, is_media=True)
+
+        # Buffer queue to keep all workers saturated
+        queue = asyncio.Queue(maxsize=workers_count * 2)
+        workers = [asyncio.create_task(worker(session)) for _ in range(workers_count)]
+
+        try:
+            fp.seek(part_size * file_part)
+
+            while True:
+                chunk = fp.read(part_size)
+                if not chunk:
+                    if not is_big and not is_missing_part:
+                        md5_sum = "".join([hex(i)[2:].zfill(2) for i in md5_sum.digest()])
+                    break
+
+                if is_big:
+                    rpc = raw.functions.upload.SaveBigFilePart(
+                        file_id=file_id,
+                        file_part=file_part,
+                        file_total_parts=file_total_parts,
+                        bytes=chunk,
+                    )
+                else:
+                    rpc = raw.functions.upload.SaveFilePart(
+                        file_id=file_id, file_part=file_part, bytes=chunk
+                    )
+
+                await queue.put(rpc)
+
+                if is_missing_part:
+                    break
+
+                if not is_big and not is_missing_part:
+                    md5_sum.update(chunk)
+
+                file_part += 1
+
+                if progress:
+                    func = functools.partial(
+                        progress,
+                        min(file_part * part_size, file_size),
+                        file_size,
+                        *progress_args,
+                    )
+                    if asyncio.iscoroutinefunction(progress):
+                        await func()
+                    else:
+                        await asyncio.get_running_loop().run_in_executor(self.executor, func)
+        except StopTransmission:
+            raise
+        except Exception as e:
+            raise
+        finally:
+            for _ in workers:
+                await queue.put(None)
+            await asyncio.gather(*workers)
+            if isinstance(path, (str, os.PathLike)):
+                fp.close()
+
+        if failures:
+            raise failures[0]
+
+        if is_missing_part:
+            return None
+
+        if is_big:
+            return raw.types.InputFileBig(id=file_id, parts=file_total_parts, name=file_name)
+
+        return raw.types.InputFile(
+            id=file_id, parts=file_total_parts, name=file_name, md5_checksum=md5_sum
+        )
+
+Client.save_file = boosted_save_file
+
 bot = Client(
     "tg_drive_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
     in_memory=True,
-    max_concurrent_transmissions=4
+    max_concurrent_transmissions=10
 )
 
 @asynccontextmanager

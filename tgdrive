@@ -12,6 +12,7 @@ import urllib.parse
 import urllib.error
 import mimetypes
 import fnmatch
+import time
 from pathlib import Path
 
 GLOBAL_CONFIG_DIR = Path.home() / ".tgdrive"
@@ -154,8 +155,12 @@ def upload_file_http(remote, auth_key, file_path, target_folder):
             self.stage = 0  # 0: header, 1: file, 2: footer, 3: done
             self.sent = 0
             self.total = total_length
+            self.start_time = time.time()
+            self.last_time = self.start_time
+            self.last_sent = 0
+            self.speed = 0
 
-        def read(self, size=65536):
+        def read(self, size=262144):  # 256KB chunks for higher throughput
             if self.stage == 0:
                 self.stage = 1
                 return header_bytes
@@ -166,9 +171,25 @@ def upload_file_http(remote, auth_key, file_path, target_folder):
                     self.file.close()
                     return footer_bytes
                 self.sent += len(chunk)
+                now = time.time()
+                dt = now - self.last_time
+                if dt >= 0.2:
+                    instant_speed = (self.sent - self.last_sent) / dt
+                    self.speed = instant_speed if self.speed == 0 else (self.speed * 0.7 + instant_speed * 0.3)
+                    self.last_time = now
+                    self.last_sent = self.sent
+
                 pct = int((self.sent / file_size) * 100) if file_size else 100
                 bar = "#" * (pct // 5) + "-" * (20 - (pct // 5))
-                sys.stdout.write(f"\r  {C.CYAN}↑{C.RESET} {file_name[:26]:<26} [{bar}] {pct:>3}% ({format_bytes(self.sent)}/{format_bytes(file_size)})")
+                speed_str = f"⚡ {format_bytes(self.speed)}/s" if self.speed > 0 else ""
+                rem = file_size - self.sent
+                eta_sec = int(rem / self.speed) if self.speed > 0 else 0
+                eta_str = f"• ~{eta_sec}s" if (eta_sec > 0 and eta_sec < 120) else ""
+
+                if pct >= 100:
+                    sys.stdout.write(f"\r  {C.CYAN}↑{C.RESET} {file_name[:20]:<20} [{bar}] 100% {C.YELLOW}🚀 Syncing TG...{C.RESET}              ")
+                else:
+                    sys.stdout.write(f"\r  {C.CYAN}↑{C.RESET} {file_name[:20]:<20} [{bar}] {pct:>3}% ({format_bytes(self.sent)}/{format_bytes(file_size)}) {speed_str} {eta_str}   ")
                 sys.stdout.flush()
                 return chunk
             elif self.stage == 2:
@@ -186,9 +207,11 @@ def upload_file_http(remote, auth_key, file_path, target_folder):
     req.add_header("x-auth", auth_key)
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            sys.stdout.write(f"\r  {C.GREEN}✔{C.RESET} {file_name[:26]:<26} [####################] 100% {C.DIM}(Sync to TG done){C.RESET}\n")
+            total_duration = time.time() - stream.start_time
+            avg_speed = format_bytes(file_size / max(0.1, total_duration)) + "/s"
+            sys.stdout.write(f"\r  {C.GREEN}✔{C.RESET} {file_name[:20]:<20} [####################] 100% {C.DIM}({format_bytes(file_size)} in {total_duration:.1f}s • {avg_speed}){C.RESET}        \n")
             sys.stdout.flush()
             return data
     except urllib.error.HTTPError as e:

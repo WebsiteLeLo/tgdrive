@@ -1135,10 +1135,10 @@
       background: var(--bg-base);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-      padding: 8px 10px;
+      padding: 10px 12px;
       display: flex;
       flex-direction: column;
-      gap: 5px;
+      gap: 6px;
     }
     .upload-item-top {
       display: flex;
@@ -1154,21 +1154,41 @@
       white-space: nowrap;
       max-width: 220px;
     }
-    .upload-item-status {
+    .upload-item-pct {
       font-size: 11px;
-      color: var(--text-muted);
+      font-weight: 700;
+      color: var(--primary);
     }
     .upload-bar-track {
-      height: 4px;
+      height: 5px;
       background: var(--bg-subtle);
       border-radius: 99px;
       overflow: hidden;
+      position: relative;
     }
     .upload-bar-fill {
       height: 100%;
-      background: var(--primary);
+      background: linear-gradient(90deg, var(--primary), #38bdf8);
       width: 0%;
       transition: width 0.15s ease;
+    }
+    .upload-item-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+    .upload-item-speed {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+    .upload-item-size {
+      font-weight: 500;
+      opacity: 0.9;
     }
 
     /* Drag & Drop Fullscreen Overlay */
@@ -3758,97 +3778,157 @@
       document.getElementById('uploadDock').classList.remove('open');
     }
 
-    async function uploadFileBatch(fileList, targetFolder) {
+    async function executeBatchUpload(items, title) {
       const dockList = document.getElementById('uploadDockList');
       dockList.innerHTML = '';
-      openUploadDock(`Uploading ${fileList.length} files...`);
+      openUploadDock(title);
 
-      const items = fileList.map((file, idx) => {
+      items.forEach(item => {
         const div = document.createElement('div');
         div.className = 'upload-item';
-        div.innerHTML = `
-          <div class="upload-item-top">
-            <span class="upload-item-name" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-            <span class="upload-item-status" id="upStatus_${idx}">Waiting...</span>
-          </div>
-          <div class="upload-bar-track">
-            <div class="upload-bar-fill" id="upBar_${idx}"></div>
-          </div>
-        `;
-        dockList.appendChild(div);
-        return { file, folder: targetFolder, idx };
-      });
-
-      for (const item of items) {
-        await uploadSingleItem(item.file, item.folder, item.idx);
-      }
-
-      document.getElementById('uploadDockHeading').innerText = 'Uploads Complete ✓';
-      showToast('All files uploaded to Telegram Cloud!', 'success');
-      loadFiles();
-    }
-
-    async function uploadFolderBatch(items) {
-      const dockList = document.getElementById('uploadDockList');
-      dockList.innerHTML = '';
-      openUploadDock(`Uploading folder (${items.length} items)...`);
-
-      const elements = items.map((item, idx) => {
-        const div = document.createElement('div');
-        div.className = 'upload-item';
+        div.id = `upItem_${item.idx}`;
         div.innerHTML = `
           <div class="upload-item-top">
             <span class="upload-item-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</span>
-            <span class="upload-item-status" id="upStatus_${idx}">Waiting...</span>
+            <span class="upload-item-pct" id="upPct_${item.idx}">0%</span>
           </div>
           <div class="upload-bar-track">
-            <div class="upload-bar-fill" id="upBar_${idx}"></div>
+            <div class="upload-bar-fill" id="upBar_${item.idx}"></div>
+          </div>
+          <div class="upload-item-meta">
+            <span class="upload-item-speed" id="upSpeed_${item.idx}">Waiting in queue...</span>
+            <span class="upload-item-size" id="upSize_${item.idx}">${formatBytes(item.file.size)}</span>
           </div>
         `;
         dockList.appendChild(div);
-        return { file: item.file, folder: item.folder, idx };
       });
 
-      for (const item of elements) {
-        await uploadSingleItem(item.file, item.folder, item.idx);
+      const activeSpeeds = new Map();
+      let completedCount = 0;
+
+      function updateDockHeading() {
+        let totalSpeed = 0;
+        for (const spd of activeSpeeds.values()) {
+          totalSpeed += spd;
+        }
+        const speedStr = totalSpeed > 0 ? ` • ⚡ ${formatBytes(totalSpeed)}/s` : '';
+        const heading = document.getElementById('uploadDockHeading');
+        if (heading) {
+          heading.innerText = `Uploading (${completedCount}/${items.length} files)${speedStr}`;
+        }
       }
 
-      document.getElementById('uploadDockHeading').innerText = 'Folder Upload Complete ✓';
-      showToast('Complete directory uploaded successfully!', 'success');
+      // Concurrency pool: 2 simultaneous uploads for 2x throughput
+      const CONCURRENCY = 2;
+      let nextIndex = 0;
+
+      async function worker() {
+        while (nextIndex < items.length) {
+          const item = items[nextIndex++];
+          await uploadSingleItem(item.file, item.folder, item.idx, (spd) => {
+            activeSpeeds.set(item.idx, spd);
+            updateDockHeading();
+          });
+          activeSpeeds.delete(item.idx);
+          completedCount++;
+          updateDockHeading();
+        }
+      }
+
+      const workers = [];
+      for (let i = 0; i < Math.min(CONCURRENCY, items.length); i++) {
+        workers.push(worker());
+      }
+      await Promise.all(workers);
+
+      const heading = document.getElementById('uploadDockHeading');
+      if (heading) heading.innerText = 'Uploads Complete ✓';
+      showToast('All files uploaded successfully!', 'success');
       loadFiles();
     }
 
-    function uploadSingleItem(file, folder, idx) {
+    async function uploadFileBatch(fileList, targetFolder) {
+      const items = fileList.map((file, idx) => ({ file, folder: targetFolder, idx }));
+      await executeBatchUpload(items, `Uploading ${fileList.length} files...`);
+    }
+
+    async function uploadFolderBatch(items) {
+      const formattedItems = items.map((item, idx) => ({ file: item.file, folder: item.folder, idx }));
+      await executeBatchUpload(formattedItems, `Uploading folder (${items.length} files)...`);
+    }
+
+    function uploadSingleItem(file, folder, idx, onSpeedUpdate) {
       return new Promise((resolve) => {
         const bar = document.getElementById(`upBar_${idx}`);
-        const status = document.getElementById(`upStatus_${idx}`);
-        status.innerText = 'Uploading...';
+        const pctEl = document.getElementById(`upPct_${idx}`);
+        const speedEl = document.getElementById(`upSpeed_${idx}`);
+        const sizeEl = document.getElementById(`upSize_${idx}`);
+
+        if (speedEl) speedEl.innerText = '⚡ Connecting...';
 
         const xhr = new XMLHttpRequest();
         const formData = new FormData();
         formData.append('file', file);
         formData.append('folder', folder);
 
+        let lastLoaded = 0;
+        let lastTime = performance.now();
+        let speedRolling = 0;
+        const startTime = performance.now();
+
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) {
+            const now = performance.now();
+            const timeDelta = (now - lastTime) / 1000;
+
+            if (timeDelta >= 0.25) {
+              const bytesDelta = e.loaded - lastLoaded;
+              const instantSpeed = bytesDelta / timeDelta;
+              speedRolling = speedRolling === 0 ? instantSpeed : (speedRolling * 0.7 + instantSpeed * 0.3);
+              lastLoaded = e.loaded;
+              lastTime = now;
+              if (onSpeedUpdate) onSpeedUpdate(speedRolling);
+            }
+
             const pct = Math.round((e.loaded / e.total) * 100);
             if (bar) bar.style.width = pct + '%';
-            if (status) status.innerText = pct === 100 ? 'Syncing TG...' : `${pct}%`;
+            if (pctEl) pctEl.innerText = pct + '%';
+
+            const speedStr = speedRolling > 0 ? formatBytes(speedRolling) + '/s' : 'Calculating...';
+            const loadedStr = formatBytes(e.loaded);
+            const totalStr = formatBytes(e.total);
+            if (sizeEl) sizeEl.innerText = `${loadedStr} / ${totalStr}`;
+
+            if (pct >= 100) {
+              if (speedEl) speedEl.innerHTML = `<span style="color:var(--primary); font-weight:600;">🚀 Syncing to Telegram Cloud...</span>`;
+            } else {
+              const remainingBytes = e.total - e.loaded;
+              const etaSec = speedRolling > 0 ? Math.ceil(remainingBytes / speedRolling) : 0;
+              const etaStr = etaSec > 0 ? (etaSec > 60 ? `~${Math.ceil(etaSec/60)}m left` : `~${etaSec}s left`) : '';
+              if (speedEl) speedEl.innerHTML = `⚡ <b>${speedStr}</b> ${etaStr ? '• ' + etaStr : ''}`;
+            }
           }
         };
 
         xhr.onload = () => {
+          const duration = ((performance.now() - startTime) / 1000).toFixed(1);
+          const avgSpeed = formatBytes(file.size / Math.max(0.1, duration)) + '/s';
           if (xhr.status === 200) {
             if (bar) { bar.style.width = '100%'; bar.style.background = 'var(--success)'; }
-            if (status) { status.innerText = 'Done ✓'; status.style.color = 'var(--success)'; }
+            if (pctEl) { pctEl.innerText = '100%'; pctEl.style.color = 'var(--success)'; }
+            if (speedEl) { speedEl.innerHTML = `<span style="color:var(--success);">✔ Completed in ${duration}s (${avgSpeed})</span>`; }
           } else {
-            if (status) { status.innerText = 'Failed ✕'; status.style.color = 'var(--danger)'; }
+            if (pctEl) { pctEl.innerText = '✕'; pctEl.style.color = 'var(--danger)'; }
+            if (speedEl) { speedEl.innerHTML = `<span style="color:var(--danger);">Upload failed (${xhr.status})</span>`; }
           }
+          if (onSpeedUpdate) onSpeedUpdate(0);
           resolve();
         };
 
         xhr.onerror = () => {
-          if (status) { status.innerText = 'Error ✕'; status.style.color = 'var(--danger)'; }
+          if (pctEl) { pctEl.innerText = '✕'; pctEl.style.color = 'var(--danger)'; }
+          if (speedEl) { speedEl.innerHTML = `<span style="color:var(--danger);">Network error</span>`; }
+          if (onSpeedUpdate) onSpeedUpdate(0);
           resolve();
         };
 
