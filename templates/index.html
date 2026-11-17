@@ -2423,6 +2423,10 @@
             <svg class="icon icon-sm" style="color:var(--primary);" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
             <span>Share Folder</span>
           </button>
+          <button class="btn btn-secondary" id="btnDeleteFolder" onclick="confirmDeleteCurrentFolder()" style="display:none; color:var(--danger);" title="Delete current folder">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <span>Delete Folder</span>
+          </button>
           <select class="sort-select" id="sortSelect" onchange="onSortChange()">
             <option value="date-desc">Newest First</option>
             <option value="date-asc">Oldest First</option>
@@ -3185,6 +3189,16 @@
         `;
       }
       wrap.innerHTML = html;
+
+      const btnDel = document.getElementById('btnDeleteFolder');
+      if (btnDel) {
+        btnDel.style.display = (!isPublicShare && currentCategory === 'all' && currentFolder !== '/') ? 'inline-flex' : 'none';
+      }
+    }
+
+    function confirmDeleteCurrentFolder() {
+      if (currentFolder === '/' || isPublicShare) return;
+      confirmDeleteFolder(null, currentFolder);
     }
 
     // Load Files from Server
@@ -3314,8 +3328,13 @@
         const meta = subfoldersMeta.find(m => m.path === sf);
         const token = meta ? meta.share_token : '';
         const shareBtn = !isPublicShare && token ? `
-          <button class="icon-btn" style="padding:4px 6px; margin-right:6px;" onclick="openShareFolderModal(event, '${escapeHtml(sf)}', '${token}')" title="Share this folder publicly">
+          <button class="icon-btn" style="padding:4px 6px; margin-right:4px;" onclick="openShareFolderModal(event, '${escapeHtml(sf)}', '${token}')" title="Share this folder publicly">
             <svg class="icon icon-sm" style="color:var(--primary);" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          </button>
+        ` : '';
+        const delBtn = !isPublicShare ? `
+          <button class="icon-btn" style="padding:4px 6px; margin-right:6px; color:var(--text-muted);" onmouseover="this.style.color='var(--danger)'" onmouseout="this.style.color='var(--text-muted)'" onclick="confirmDeleteFolder(event, '${escapeHtml(sf)}')" title="Delete this folder">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         ` : '';
         return `
@@ -3328,6 +3347,7 @@
             </div>
             <div style="display:flex; align-items:center;">
               ${shareBtn}
+              ${delBtn}
               <svg class="icon icon-sm" style="color:var(--text-muted);" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
             </div>
           </div>
@@ -4631,7 +4651,7 @@
     }
 
     function confirmDeleteFolder(e, folderPath) {
-      e.stopPropagation();
+      if (e) e.stopPropagation();
       openConfirmModal(`Delete folder "${folderPath}" and all files contained within it?`, async () => {
         try {
           const res = await fetch(`/api/folders?path=${encodeURIComponent(folderPath)}`, {
@@ -4640,10 +4660,14 @@
           });
           if (res.ok) {
             showToast(`Deleted folder ${folderPath}`, 'success');
-            if (currentFolder.startsWith(folderPath)) currentFolder = '/';
+            if (currentFolder === folderPath || currentFolder.startsWith(folderPath + '/')) {
+              currentFolder = '/';
+            }
+            renderBreadcrumbs();
             loadFiles();
           } else {
-            showToast('Folder deletion failed', 'error');
+            const err = await res.json().catch(() => ({}));
+            showToast(err.detail || 'Folder deletion failed', 'error');
           }
         } catch (e) {
           showToast('Error: ' + e.message, 'error');

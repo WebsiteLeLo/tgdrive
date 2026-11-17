@@ -487,12 +487,51 @@ def parse_folder_command(text: str) -> str | None:
         if cmd.lower() in (
             "/start", "/help", "/id", "/myid", "/folders", "/myfolders", "/list",
             "/newfolder", "/mkdir", "/create", "/share", "/sharefolder",
-            "/root", "/home", "/resetfolder", "/files", "/status"
+            "/root", "/home", "/resetfolder", "/files", "/status",
+            "/delfolder", "/deletefolder", "/rmdir"
         ):
             return None
         f = cmd.rstrip("/")
         return f if f else "/"
     return None
+
+async def perform_delete_folder(folder_path: str, user_id: int | None = None) -> tuple[bool, str, int]:
+    folder_path = folder_path.rstrip("/") or "/"
+    if folder_path == "/":
+        return False, "Cannot delete root directory", 0
+
+    conn = sqlite3.connect("drive.db")
+    c = conn.cursor()
+
+    # If user_id is provided, enforce security check
+    if user_id:
+        c.execute("SELECT base_folder FROM bot_users WHERE user_id = ?", (user_id,))
+        urow = c.fetchone()
+        if not urow:
+            conn.close()
+            return False, "User not found", 0
+        user_base = urow[0]
+        if folder_path == user_base:
+            conn.close()
+            return False, "Aap apna main root folder delete nahi kar sakte!", 0
+        if not folder_path.startswith(user_base + "/"):
+            conn.close()
+            return False, "Aap sirf apna folder hi delete kar sakte hain!", 0
+
+    c.execute("SELECT id, message_id FROM files WHERE folder = ? OR folder LIKE ?", (folder_path, folder_path + "/%"))
+    files_to_del = c.fetchall()
+    for fid, mid in files_to_del:
+        try:
+            await bot.delete_messages(CHANNEL_ID, mid)
+        except Exception:
+            pass
+        c.execute("DELETE FROM files WHERE id = ?", (fid,))
+
+    c.execute("DELETE FROM folders WHERE path = ? OR path LIKE ?", (folder_path, folder_path + "/%"))
+    c.execute("UPDATE bot_users SET active_folder = base_folder WHERE active_folder = ? OR active_folder LIKE ?", (folder_path, folder_path + "/%"))
+    conn.commit()
+    conn.close()
+    return True, "Success", len(files_to_del)
 
 async def build_folders_view(u: dict):
     conn = sqlite3.connect("drive.db")
@@ -533,10 +572,16 @@ async def build_folders_view(u: dict):
         msg_lines.append(f"   📊 {cnt} files • {format_size_human(sz)}")
         msg_lines.append(f"   🔗 [Open / Share Link]({fshare})")
 
-        if not is_active:
-            btn_switch = InlineKeyboardButton(f"📂 Switch {rel_name}", callback_data=f"cb:sw:{fid}")
-            btn_share = InlineKeyboardButton("🔗 Share", callback_data=f"cb:sh:{fid}")
-            buttons.append([btn_switch, btn_share])
+        if rel_name != "🏠 Root":
+            if not is_active:
+                btn_switch = InlineKeyboardButton(f"📂 Switch {rel_name}", callback_data=f"cb:sw:{fid}")
+                btn_share = InlineKeyboardButton("🔗 Share", callback_data=f"cb:sh:{fid}")
+                btn_del = InlineKeyboardButton("🗑️", callback_data=f"cb:del_ask:{fid}")
+                buttons.append([btn_switch, btn_share, btn_del])
+            else:
+                btn_share = InlineKeyboardButton("🔗 Share Active", callback_data=f"cb:sh:{fid}")
+                btn_del = InlineKeyboardButton(f"🗑️ Delete {rel_name}", callback_data=f"cb:del_ask:{fid}")
+                buttons.append([btn_share, btn_del])
 
     buttons.append([
         InlineKeyboardButton("🏠 Switch to Root", callback_data="cb:root"),
@@ -545,6 +590,7 @@ async def build_folders_view(u: dict):
 
     msg_lines.append("\n────────────────────────")
     msg_lines.append("💡 *Naya folder banane ke liye `/newfolder <name>` likhein.*")
+    msg_lines.append("💡 *Folder delete karne ke liye `/delfolder <name>` likhein.*")
     msg_lines.append("💡 *Fast switch ke liye bas command bhejein (jaise `/movies`).*")
 
     return "\n".join(msg_lines), InlineKeyboardMarkup(buttons[:10])
@@ -569,6 +615,7 @@ async def bot_text_router(client: Client, message: Message):
             "✨ **Main Commands:**\n"
             "• `/folders` - Apne sabhi folders aur file counts dekhein\n"
             "• `/newfolder <name>` - Naya folder banayein (jaise `/newfolder Movies`)\n"
+            "• `/delfolder <name>` - Folder aur uski sabhi files delete karein\n"
             "• `/share` - Apne current active folder ka public share link paayein\n"
             "• `/root` ya `/resetfolder` - Wapas apne main root folder me jayein\n"
             "• `/files` - Current folder ki uploaded files dekhein\n"
@@ -639,6 +686,62 @@ async def bot_text_router(client: Client, message: Message):
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton(f"🌐 Open {rel_name} in Web", url=share_url)],
                 [InlineKeyboardButton("📂 All Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    # 5. /delfolder or /deletefolder or /rmdir
+    if text.lower().startswith(("/delfolder", "/deletefolder", "/rmdir")):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await reply_text_safe(
+                message,
+                "⚠️ **Folder ka naam likhein jise delete karna hai!**\n\n"
+                "Example:\n"
+                "• `/delfolder Movies`\n"
+                "• `/delfolder Chemistry/Lec1`\n\n"
+                "💡 *Apne sabhi folders dekhne ke liye `/folders` likhein.*"
+            )
+            return
+
+        raw_name = parts[1].strip()
+        target_path = resolve_user_folder_path(u["base_folder"], raw_name)
+        rel_name = get_relative_folder_name(target_path, u["base_folder"])
+
+        if target_path == u["base_folder"]:
+            await reply_text_safe(message, "⛔ **Aap apna main root folder delete nahi kar sakte.**")
+            return
+
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("SELECT id FROM folders WHERE path = ?", (target_path,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await reply_text_safe(
+                message,
+                f"❌ **Folder `{rel_name}` nahi mila!**\n\n"
+                "Apne sabhi folders dekhne ke liye `/folders` likhein."
+            )
+            return
+
+        fid = row[0]
+        c.execute("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM files WHERE folder = ? OR folder LIKE ?", (target_path, target_path + "/%"))
+        cnt, sz = c.fetchone()
+        conn.close()
+
+        await reply_text_safe(
+            message,
+            "⚠️ **Folder Deletion Confirmation** 🗑️\n\n"
+            f"📁 **Target Folder:** `{rel_name}`\n"
+            f"📊 **Files Inside:** {cnt} files ({format_size_human(sz)})\n\n"
+            "❗ *Kya aap sach me is folder aur iski sabhi files ko permanently delete karna chahte hain?*",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🗑️ Haan, Delete Karein", callback_data=f"cb:del_cf:{fid}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="cb:del_cn")
+                ]
             ]),
             disable_preview=True
         )
@@ -914,6 +1017,96 @@ async def bot_callback_router(client: Client, query: CallbackQuery):
         await query.answer()
         msg_text, markup = await build_folders_view(u)
         await reply_text_safe(query.message, msg_text, reply_markup=markup, disable_preview=True)
+        return
+
+    elif data.startswith("cb:del_ask:"):
+        fid_str = data.split(":", 2)[2]
+        try:
+            fid = int(fid_str)
+        except ValueError:
+            return
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("SELECT path FROM folders WHERE id = ?", (fid,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await query.answer("Folder not found!", show_alert=True)
+            return
+
+        fpath = row[0]
+        if not fpath.startswith(u["base_folder"] + "/"):
+            conn.close()
+            await query.answer("Aap sirf apna subfolder delete kar sakte hain!", show_alert=True)
+            return
+
+        c.execute("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM files WHERE folder = ? OR folder LIKE ?", (fpath, fpath + "/%"))
+        cnt, sz = c.fetchone()
+        conn.close()
+
+        rel_name = get_relative_folder_name(fpath, u["base_folder"])
+        await query.answer()
+        await reply_text_safe(
+            query.message,
+            "⚠️ **Confirm Delete Folder?** 🗑️\n\n"
+            f"📁 **Folder:** `{rel_name}`\n"
+            f"📊 **Files Inside:** {cnt} files ({format_size_human(sz)})\n\n"
+            "❗ *Ye folder aur iski sabhi files Telegram Channel aur TG-Drive se permanent delete ho jayengi.*",
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🗑️ Haan, Delete Karein", callback_data=f"cb:del_cf:{fid}"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="cb:del_cn")
+                ]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    elif data.startswith("cb:del_cf:"):
+        fid_str = data.split(":", 2)[2]
+        try:
+            fid = int(fid_str)
+        except ValueError:
+            return
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("SELECT path FROM folders WHERE id = ?", (fid,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            await query.answer("Folder already deleted or not found!", show_alert=True)
+            return
+
+        fpath = row[0]
+        rel_name = get_relative_folder_name(fpath, u["base_folder"])
+        ok, err_msg, del_cnt = await perform_delete_folder(fpath, u["user_id"])
+        if not ok:
+            await query.answer(f"Error: {err_msg}", show_alert=True)
+            return
+
+        await query.answer("Folder deleted successfully! 🗑️")
+        await reply_text_safe(
+            query.message,
+            f"✅ **Folder Deleted Successfully!** 🗑️\n\n"
+            f"📁 Folder **`{rel_name}`** aur uski **{del_cnt} files** delete kar di gayi hain.\n\n"
+            f"🎯 Active folder wapas root (`{u['base_folder']}`) set ho gaya hai.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📂 View Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    elif data == "cb:del_cn":
+        await query.answer("Deletion cancelled")
+        await reply_text_safe(
+            query.message,
+            "❌ **Folder Deletion Cancelled**",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📂 View Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
+        )
         return
 
 @bot.on_message(
@@ -1249,25 +1442,10 @@ async def create_folder(request: Request, x_auth: str = Header("")):
 @app.delete("/api/folders")
 async def delete_folder(path: str, x_auth: str = Header("")):
     verify_auth(x_auth)
-    path = path.rstrip("/") or "/"
-    if path == "/":
-        raise HTTPException(status_code=400, detail="Cannot delete root directory")
-
-    conn = sqlite3.connect("drive.db")
-    c = conn.cursor()
-    c.execute("DELETE FROM folders WHERE path = ? OR path LIKE ?", (path, path + "/%"))
-    
-    c.execute("SELECT id, message_id FROM files WHERE folder = ? OR folder LIKE ?", (path, path + "/%"))
-    files_to_del = c.fetchall()
-    for fid, mid in files_to_del:
-        try:
-            await bot.delete_messages(CHANNEL_ID, mid)
-        except Exception:
-            pass
-        c.execute("DELETE FROM files WHERE id = ?", (fid,))
-    conn.commit()
-    conn.close()
-    return {"status": "ok", "deleted_files": len(files_to_del)}
+    ok, msg, del_cnt = await perform_delete_folder(path)
+    if not ok:
+        raise HTTPException(status_code=400, detail=msg)
+    return {"status": "ok", "deleted_files": del_cnt}
 
 @app.post("/api/upload")
 async def upload_file(
