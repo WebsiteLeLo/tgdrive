@@ -13,6 +13,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Hea
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, LinkPreviewOptions, CallbackQuery
+from pyrogram.errors import FloodWait
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -340,6 +341,26 @@ async def cleanup_stale_chunks():
         except Exception as e:
             print(f"Cleanup error: {e}")
 
+media_processing_queue: asyncio.Queue = asyncio.Queue()
+
+async def media_queue_worker():
+    while True:
+        try:
+            job = await media_processing_queue.get()
+            try:
+                await process_media_job(job)
+            except Exception as e:
+                print(f"[media_queue_worker job error] {e}")
+            finally:
+                media_processing_queue.task_done()
+                # 1.2s delay between successful copies avoids Telegram flood limit on the channel
+                await asyncio.sleep(1.2)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[media_queue_worker loop error] {e}")
+            await asyncio.sleep(1)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await bot.start()
@@ -349,8 +370,10 @@ async def lifespan(app: FastAPI):
     except Exception:
         print("Telegram MTProto Connected (Subfolder Edition)")
     cleanup_task = asyncio.create_task(cleanup_stale_chunks())
+    worker_task = asyncio.create_task(media_queue_worker())
     yield
     cleanup_task.cancel()
+    worker_task.cancel()
     await bot.stop()
 
 app = FastAPI(lifespan=lifespan)
@@ -367,21 +390,41 @@ def get_link_preview_opts(disable_preview: bool = True):
 
 async def reply_text_safe(message: Message, text: str, reply_markup=None, disable_preview: bool = True):
     opts = get_link_preview_opts(disable_preview)
-    if opts is not None:
+    for attempt in range(4):
         try:
-            return await message.reply_text(text, reply_markup=reply_markup, link_preview_options=opts)
-        except TypeError:
-            pass
-    return await message.reply_text(text, reply_markup=reply_markup)
+            if opts is not None:
+                try:
+                    return await message.reply_text(text, reply_markup=reply_markup, link_preview_options=opts)
+                except TypeError:
+                    pass
+            return await message.reply_text(text, reply_markup=reply_markup)
+        except FloodWait as e:
+            wait_s = int(getattr(e, 'value', 3) or 3)
+            print(f"[FloodWait on reply] Waiting {wait_s}s...")
+            await asyncio.sleep(wait_s + 1)
+        except Exception:
+            return None
+    return None
 
 async def edit_text_safe(message: Message, text: str, reply_markup=None, disable_preview: bool = True):
+    if not message:
+        return None
     opts = get_link_preview_opts(disable_preview)
-    if opts is not None:
+    for attempt in range(4):
         try:
-            return await message.edit_text(text, reply_markup=reply_markup, link_preview_options=opts)
-        except TypeError:
-            pass
-    return await message.edit_text(text, reply_markup=reply_markup)
+            if opts is not None:
+                try:
+                    return await message.edit_text(text, reply_markup=reply_markup, link_preview_options=opts)
+                except TypeError:
+                    pass
+            return await message.edit_text(text, reply_markup=reply_markup)
+        except FloodWait as e:
+            wait_s = int(getattr(e, 'value', 3) or 3)
+            print(f"[FloodWait on edit] Waiting {wait_s}s...")
+            await asyncio.sleep(wait_s + 1)
+        except Exception:
+            return None
+    return None
 
 def get_or_create_bot_user(user) -> dict:
     if not user:
@@ -1180,17 +1223,55 @@ async def bot_media_receiver(client: Client, message: Message):
     if not target_folder:
         target_folder = u["active_folder"]
 
-    try:
-        # Copy message directly to CHANNEL_ID (instant Telegram server-side clone, 0 byte VPS transfer!)
-        chan_msg = await message.copy(
-            chat_id=CHANNEL_ID,
-            caption=f"Folder: `{target_folder}` | File: `{file_name}`"
-        )
-    except Exception as e:
+    q_len = media_processing_queue.qsize()
+    queue_msg = f"⚡ Queued for storage (Position #{q_len + 1})..." if q_len > 0 else "⚡ Processing file & generating stream link..."
+    status_msg = await reply_text_safe(message, queue_msg)
+
+    # Enqueue for safe, rate-paced background processing
+    await media_processing_queue.put({
+        "message": message,
+        "status_msg": status_msg,
+        "user": u,
+        "target_folder": target_folder,
+        "file_name": file_name,
+        "file_size": file_size,
+        "mime_type": mime_type
+    })
+
+async def process_media_job(job: dict):
+    message = job["message"]
+    status_msg = job["status_msg"]
+    u = job["user"]
+    target_folder = job["target_folder"]
+    file_name = job["file_name"]
+    file_size = job["file_size"]
+    mime_type = job["mime_type"]
+
+    chan_msg = None
+    for attempt in range(6):
+        try:
+            chan_msg = await message.copy(
+                chat_id=CHANNEL_ID,
+                caption=f"Folder: `{target_folder}` | File: `{file_name}`"
+            )
+            break
+        except FloodWait as e:
+            wait_time = int(getattr(e, 'value', 5) or 5)
+            print(f"[FloodWait] Telegram asked to wait {wait_time}s for '{file_name}'")
+            if status_msg:
+                await edit_text_safe(
+                    status_msg,
+                    f"⏳ **Telegram rate limit active.**\n\nAuto-waiting `{wait_time}s` before saving `{file_name}`...\n*(Bache huye files queue me safe hain, thoda intezar karein!)*"
+                )
+            await asyncio.sleep(wait_time + 1)
+        except Exception as e:
+            if status_msg:
+                await edit_text_safe(status_msg, f"❌ Failed to store file in Telegram Channel: {e}")
+            return
+
+    if not chan_msg:
         if status_msg:
-            await edit_text_safe(status_msg, f"❌ Failed to store file in Telegram Channel: {e}")
-        else:
-            await reply_text_safe(message, f"❌ Failed to store file in Telegram Channel: {e}")
+            await edit_text_safe(status_msg, "❌ Failed to store file after multiple retries.")
         return
 
     # Generate unique share tokens
