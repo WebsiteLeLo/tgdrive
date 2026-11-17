@@ -331,6 +331,8 @@ app = FastAPI(lifespan=lifespan)
 # Telegram Bot Interactive PM Handlers
 # ========================================================
 
+user_active_folder: dict[int, str] = {}
+
 def get_link_preview_opts(disable_preview: bool = True):
     try:
         return LinkPreviewOptions(is_disabled=disable_preview)
@@ -355,33 +357,162 @@ async def edit_text_safe(message: Message, text: str, reply_markup=None, disable
             pass
     return await message.edit_text(text, reply_markup=reply_markup)
 
-@bot.on_message(filters.private & filters.command(["start", "help"]))
-async def bot_start_handler(client: Client, message: Message):
-    welcome_text = (
-        "👋 **Namaste! Welcome to TG-Cloud Drive Bot** 🚀\n\n"
-        "Mujhe koi bhi **video, movie, document, audio, ya file** forward ya direct send kijiye.\n\n"
-        "Mai aapko turant:\n"
-        "• 🎬 **Web Browser Streaming Link** (Online video player ke sath)\n"
-        "• ⚡ **Direct High-Speed Download Link** (Range & multi-thread enabled)\n"
-        "• 📂 TG-Drive me auto-save kar dunga!\n\n"
-        "💡 *Tip: File bhejte waqt caption me folder ka naam likh sakte hain, jaise `/movies` ya `/notes`.*\n\n"
-        f"🌐 **Web Drive UI:** {BASE_URL}"
-    )
-    await reply_text_safe(
-        message,
-        welcome_text,
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🌐 Open Web Drive", url=BASE_URL)]
-        ]),
-        disable_preview=True
-    )
+def parse_folder_command(text: str) -> str | None:
+    if not text:
+        return None
+    clean = text.strip()
+    if clean.lower().startswith("/folder"):
+        parts = clean.split(maxsplit=1)
+        if len(parts) > 1 and parts[1].strip():
+            f = parts[1].strip()
+            if not f.startswith("/"):
+                f = "/" + f
+            return f.rstrip("/") or "/"
+        return None
 
-@bot.on_message(filters.private & filters.command(["id", "myid"]))
-async def bot_id_handler(client: Client, message: Message):
+    if clean.startswith("/") and not clean.startswith("//"):
+        cmd = clean.split()[0]
+        # Ignore reserved system commands
+        if cmd.lower() in ("/start", "/help", "/id", "/myid", "/folders", "/resetfolder"):
+            return None
+        f = cmd.rstrip("/")
+        return f if f else "/"
+    return None
+
+@bot.on_message(filters.private & filters.text)
+async def bot_text_router(client: Client, message: Message):
+    text = (message.text or "").strip()
+    user_id = message.from_user.id if message.from_user else 0
+
+    # 1. /start or /help
+    if text.lower() in ("/start", "/help"):
+        current_f = user_active_folder.get(user_id, "/Telegram")
+        welcome_text = (
+            "👋 **Namaste! Welcome to TG-Cloud Drive Bot** 🚀\n\n"
+            "Mujhe koi bhi **video, movie, document, audio, ya file** forward ya direct send kijiye.\n\n"
+            "Mai aapko turant:\n"
+            "• 🎬 **Web Browser Streaming Link** (Online video player ke sath)\n"
+            "• ⚡ **Direct High-Speed Download Link** (Range & multi-thread enabled)\n"
+            "• 📂 TG-Drive me auto-save kar dunga!\n\n"
+            f"🎯 **Current Active Folder:** `{current_f}`\n\n"
+            "💡 *Folder select karne ke liye bas `/movies` ya `/notes` likh kar bhej dijiye.*\n\n"
+            f"🌐 **Web Drive UI:** {BASE_URL}"
+        )
+        await reply_text_safe(
+            message,
+            welcome_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌐 Open Web Drive", url=BASE_URL)]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    # 2. /id or /myid
+    if text.lower() in ("/id", "/myid"):
+        await reply_text_safe(
+            message,
+            f"👤 **Your Telegram User ID:** `{message.from_user.id}`\n"
+            f"📛 **Username:** @{message.from_user.username or 'none'}"
+        )
+        return
+
+    # 3. /resetfolder
+    if text.lower() == "/resetfolder":
+        user_active_folder[user_id] = "/Telegram"
+        await reply_text_safe(
+            message,
+            "🔄 **Folder Reset**: Default folder `/Telegram` select ho gaya hai.\n\n"
+            "Naya folder select karne ke liye bas type kijiye (e.g. `/movies` ya `/notes`)."
+        )
+        return
+
+    # 4. /folders
+    if text.lower() == "/folders":
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("SELECT DISTINCT path FROM folders WHERE path != '/' ORDER BY path")
+        all_folders = [r[0] for r in c.fetchall()]
+        conn.close()
+        current = user_active_folder.get(user_id, "/Telegram")
+        folder_list_str = "\n".join([f"• `{f}`" for f in all_folders[:20]]) if all_folders else "*(No custom folders yet)*"
+        await reply_text_safe(
+            message,
+            f"📂 **Current Active Folder:** `{current}`\n\n"
+            f"📁 **Existing Folders in Drive:**\n{folder_list_str}\n\n"
+            "💡 Naya folder set karne ke liye bas `/folder_name` type kijiye (jaise `/movies`)."
+        )
+        return
+
+    # 5. Check if text is a folder path (e.g. "/movies" or "/Chemistry/Lec1" or "/folder /movies")
+    folder_path = parse_folder_command(text)
+    if folder_path:
+        # Check if user is replying to an existing file message to MOVE it
+        if message.reply_to_message:
+            replied = message.reply_to_message
+            target_token = None
+
+            # Look for /f/{token} in replied text or buttons
+            m = re.search(r'/f/([a-zA-Z0-9_\-]+)', replied.text or "")
+            if m:
+                target_token = m.group(1)
+            elif replied.reply_markup and replied.reply_markup.inline_keyboard:
+                for row in replied.reply_markup.inline_keyboard:
+                    for btn in row:
+                        if btn.url:
+                            bm = re.search(r'/f/([a-zA-Z0-9_\-]+)', btn.url)
+                            if bm:
+                                target_token = bm.group(1)
+                                break
+                    if target_token:
+                        break
+
+            if target_token:
+                conn = sqlite3.connect("drive.db")
+                c = conn.cursor()
+                c.execute("INSERT OR IGNORE INTO folders (path, share_token) VALUES (?, ?)", (folder_path, secrets.token_urlsafe(14)))
+                c.execute("UPDATE files SET folder = ? WHERE share_token = ?", (folder_path, target_token))
+                c.execute("SELECT name FROM files WHERE share_token = ?", (target_token,))
+                row = c.fetchone()
+                conn.commit()
+                conn.close()
+
+                file_display_name = row[0] if row else "File"
+                user_active_folder[user_id] = folder_path
+                await reply_text_safe(
+                    message,
+                    f"✅ **Moved Successfully!**\n\n"
+                    f"📄 `{file_display_name}` ko **`{folder_path}`** folder me move kar diya gaya hai.\n\n"
+                    f"🎯 Aane wali sabhi forwarded/uploaded files ke liye bhi active folder **`{folder_path}`** set ho gaya hai!"
+                )
+                return
+
+        # If not replying to a specific message, update the active folder for upcoming uploads!
+        user_active_folder[user_id] = folder_path
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO folders (path, share_token) VALUES (?, ?)", (folder_path, secrets.token_urlsafe(14)))
+        conn.commit()
+        conn.close()
+
+        await reply_text_safe(
+            message,
+            f"📂 **Active Folder Set:** `{folder_path}`\n\n"
+            f"Ab aap jo bhi files ya forwarded videos bhejenge, wo automatically **`{folder_path}`** folder me store hongi! 🚀\n\n"
+            f"💡 *Abhi apni video/file forward kijiye!*"
+        )
+        return
+
+    # Fallback for generic text
+    current_f = user_active_folder.get(user_id, "/Telegram")
     await reply_text_safe(
         message,
-        f"👤 **Your Telegram User ID:** `{message.from_user.id}`\n"
-        f"📛 **Username:** @{message.from_user.username or 'none'}"
+        f"📁 **Send or forward any file, video, or document here!**\n\n"
+        f"🎯 **Target Folder:** `{current_f}`\n\n"
+        "💡 *Tips:*\n"
+        "• Kisi folder me save karne ke liye pehle `/movies` ya `/notes` bhej dijiye.\n"
+        "• Kisi purani file ko move karne ke liye uske message ko reply karke `/movies` likhiye.\n"
+        "• Folder reset karne ke liye `/resetfolder` likhiye."
     )
 
 @bot.on_message(
@@ -428,16 +559,33 @@ async def bot_media_receiver(client: Client, message: Message):
         else:
             file_name = f"file_{message.id}.bin"
 
+    # Smart Title Extraction: If caption has Title: ... (common in forwarded bot messages)
+    if message.caption:
+        t_match = re.search(r'(?:Title|Name)\s*:\s*([^\r\n]+)', message.caption, re.IGNORECASE)
+        if t_match:
+            extracted_name = re.sub(r'[*_`]', '', t_match.group(1)).strip()
+            if extracted_name and len(extracted_name) > 3:
+                if "." not in extracted_name and "." in (file_name or ""):
+                    extracted_name += os.path.splitext(file_name)[1]
+                file_name = extracted_name
+
     mime_type = getattr(media, "mime_type", None) or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
 
-    # Determine folder from caption if specified (e.g. "/movies" or "folder: /notes")
-    folder = "/Telegram"
+    # Determine folder:
+    # 1. Check if caption has explicit folder (/movies or folder: /notes)
+    # 2. Check user's active folder session (set by typing /movies beforehand)
+    # 3. Default to "/Telegram"
+    user_id = message.from_user.id if message.from_user else 0
+    folder = None
     if message.caption:
         cap = message.caption.strip()
         if cap.startswith("/"):
             folder = cap.split("\n")[0].strip()
         elif cap.lower().startswith("folder:"):
             folder = cap.split(":", 1)[1].strip().split("\n")[0].strip()
+
+    if not folder:
+        folder = user_active_folder.get(user_id, "/Telegram")
 
     if not folder.startswith("/"):
         folder = "/" + folder
@@ -486,7 +634,8 @@ async def bot_media_receiver(client: Client, message: Message):
         f"📂 **Folder:** `{folder}`\n\n"
         f"🎬 **Web Stream (Online Player):**\n`{web_stream_url}`\n\n"
         f"⚡ **Direct Stream (VLC/Player):**\n`{direct_stream_url}`\n\n"
-        f"📥 **Fast Download Link:**\n`{direct_download_url}`"
+        f"📥 **Fast Download Link:**\n`{direct_download_url}`\n\n"
+        "💡 *Folder change karne ke liye is message ko reply karke naya path likhein (jaise `/chemistry`).*"
     )
 
     keyboard = InlineKeyboardMarkup([
@@ -503,15 +652,6 @@ async def bot_media_receiver(client: Client, message: Message):
         await edit_text_safe(status_msg, response_text, reply_markup=keyboard, disable_preview=True)
     else:
         await reply_text_safe(message, response_text, reply_markup=keyboard, disable_preview=True)
-
-@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "id", "myid"]))
-async def bot_text_fallback(client: Client, message: Message):
-    await reply_text_safe(
-        message,
-        "📁 **Send or forward any file, video, or document here!**\n\n"
-        "Mai aapko turant online browser me play karne aur high-speed download karne ka direct link de dunga.\n\n"
-        "💡 *Tip: File ke sath caption me `/movies` ya `/notes` likhenge toh wo us specific folder me save hogi.*"
-    )
 
 def verify_auth(password: str):
     if password != ADMIN_PASS:
