@@ -1,4 +1,6 @@
 import os
+import re
+import time
 import secrets
 import shutil
 import sqlite3
@@ -241,11 +243,57 @@ bot = Client(
     max_concurrent_transmissions=10
 )
 
+def get_chunk_base_dir():
+    # Prefer /dev/shm (RAM disk) for zero-latency I/O if available with at least 2GB free
+    shm = "/dev/shm"
+    if os.path.exists(shm) and os.access(shm, os.W_OK):
+        try:
+            stat = os.statvfs(shm)
+            free_bytes = stat.f_bavail * stat.f_frsize
+            if free_bytes > 2 * 1024 * 1024 * 1024:
+                p = os.path.join(shm, "tg_chunks")
+                os.makedirs(p, exist_ok=True)
+                return p
+        except Exception:
+            pass
+    p = os.path.join(tempfile.gettempdir(), "tg_chunks")
+    os.makedirs(p, exist_ok=True)
+    return p
+
+chunk_locks: dict[str, asyncio.Lock] = {}
+completed_chunk_uploads: dict[str, dict] = {}
+
+def get_chunk_lock(upload_id: str) -> asyncio.Lock:
+    if upload_id not in chunk_locks:
+        chunk_locks[upload_id] = asyncio.Lock()
+    return chunk_locks[upload_id]
+
+async def cleanup_stale_chunks():
+    while True:
+        try:
+            await asyncio.sleep(1800)
+            base = get_chunk_base_dir()
+            if os.path.exists(base):
+                now = time.time()
+                for entry in os.scandir(base):
+                    if entry.is_dir():
+                        try:
+                            if now - entry.stat().st_mtime > 7200:
+                                shutil.rmtree(entry.path, ignore_errors=True)
+                        except Exception:
+                            pass
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await bot.start()
     print("Telegram MTProto Connected (Subfolder Edition)")
+    cleanup_task = asyncio.create_task(cleanup_stale_chunks())
     yield
+    cleanup_task.cancel()
     await bot.stop()
 
 app = FastAPI(lifespan=lifespan)
@@ -510,6 +558,139 @@ async def upload_file(
     conn.close()
 
     return {"status": "ok", "message_id": msg.id, "name": file.filename, "share_token": share_token}
+
+@app.post("/api/upload/chunk")
+async def upload_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    chunk_size: int = Form(...),
+    total_size: int = Form(...),
+    file_name: str = Form(...),
+    folder: str = Form("/"),
+    chunk: UploadFile = File(...),
+    x_auth: str = Header("")
+):
+    verify_auth(x_auth)
+
+    clean_upload_id = re.sub(r'[^a-zA-Z0-9_\-]', '', upload_id)
+    if not clean_upload_id:
+        raise HTTPException(status_code=400, detail="Invalid upload_id")
+
+    # If upload was already assembled and completed, return the cached result
+    if clean_upload_id in completed_chunk_uploads:
+        return completed_chunk_uploads[clean_upload_id]
+
+    if not folder.startswith("/"):
+        folder = "/" + folder
+    folder = folder.rstrip("/") or "/"
+    clean_name = os.path.basename(file_name)
+
+    base_dir = get_chunk_base_dir()
+    upload_dir = os.path.join(base_dir, clean_upload_id)
+    os.makedirs(upload_dir, exist_ok=True)
+
+    part_tmp = os.path.join(upload_dir, f"part_{chunk_index:06d}.tmp")
+    part_done = os.path.join(upload_dir, f"part_{chunk_index:06d}.done")
+
+    # Write chunk if not already done
+    if not (os.path.exists(part_done) and os.path.getsize(part_done) > 0):
+        with open(part_tmp, "wb") as f:
+            while True:
+                data = await chunk.read(1024 * 1024)
+                if not data:
+                    break
+                f.write(data)
+        os.replace(part_tmp, part_done)
+
+    done_parts = [f for f in os.listdir(upload_dir) if f.startswith("part_") and f.endswith(".done")]
+    if len(done_parts) < total_chunks:
+        return {
+            "status": "chunk_received",
+            "chunk_index": chunk_index,
+            "received_chunks": len(done_parts),
+            "total_chunks": total_chunks
+        }
+
+    # Final chunk received: acquire lock to assemble and stream to Telegram
+    async with get_chunk_lock(clean_upload_id):
+        if clean_upload_id in completed_chunk_uploads:
+            return completed_chunk_uploads[clean_upload_id]
+
+        done_parts = [f for f in os.listdir(upload_dir) if f.startswith("part_") and f.endswith(".done")]
+        if len(done_parts) < total_chunks:
+            return {
+                "status": "chunk_received",
+                "chunk_index": chunk_index,
+                "received_chunks": len(done_parts),
+                "total_chunks": total_chunks
+            }
+
+        assembled_path = os.path.join(upload_dir, clean_name)
+        with open(assembled_path, "wb") as outfile:
+            for idx in range(total_chunks):
+                p = os.path.join(upload_dir, f"part_{idx:06d}.done")
+                if not os.path.exists(p):
+                    raise HTTPException(status_code=400, detail=f"Missing chunk {idx}")
+                with open(p, "rb") as infile:
+                    shutil.copyfileobj(infile, outfile, length=4 * 1024 * 1024)
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+
+        actual_file_size = os.path.getsize(assembled_path)
+        mime_type = mimetypes.guess_type(clean_name)[0] or "application/octet-stream"
+        share_token = secrets.token_urlsafe(12)
+
+        try:
+            msg = await bot.send_document(
+                chat_id=CHANNEL_ID,
+                document=assembled_path,
+                file_name=clean_name,
+                caption=f"Folder: `{folder}` | File: `{clean_name}`"
+            )
+        finally:
+            shutil.rmtree(upload_dir, ignore_errors=True)
+
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO files (message_id, name, size, mime_type, folder, share_token) VALUES (?, ?, ?, ?, ?, ?)",
+            (msg.id, clean_name, actual_file_size, mime_type, folder, share_token)
+        )
+        conn.commit()
+        conn.close()
+
+        res = {
+            "status": "ok",
+            "message_id": msg.id,
+            "name": clean_name,
+            "share_token": share_token
+        }
+        completed_chunk_uploads[clean_upload_id] = res
+        return res
+
+@app.get("/api/upload/chunk/status")
+async def get_chunk_status(upload_id: str, x_auth: str = Header("")):
+    verify_auth(x_auth)
+    clean_upload_id = re.sub(r'[^a-zA-Z0-9_\-]', '', upload_id)
+    if clean_upload_id in completed_chunk_uploads:
+        return completed_chunk_uploads[clean_upload_id]
+
+    upload_dir = os.path.join(get_chunk_base_dir(), clean_upload_id)
+    if not os.path.exists(upload_dir):
+        return {"status": "not_found"}
+
+    done_parts = [
+        int(f[5:11]) for f in os.listdir(upload_dir)
+        if f.startswith("part_") and f.endswith(".done") and f[5:11].isdigit()
+    ]
+    return {
+        "status": "in_progress",
+        "received_chunks": len(done_parts),
+        "chunk_indices": done_parts
+    }
 
 @app.delete("/api/files/{file_id}")
 async def delete_file(file_id: int, x_auth: str = Header("")):

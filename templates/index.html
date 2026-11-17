@@ -3820,6 +3820,7 @@
 
       // Concurrency pool: 2 simultaneous uploads for 2x throughput
       const CONCURRENCY = 2;
+      const parallelChunkStreams = items.length > 1 ? 2 : 3;
       let nextIndex = 0;
 
       async function worker() {
@@ -3828,7 +3829,7 @@
           await uploadSingleItem(item.file, item.folder, item.idx, (spd) => {
             activeSpeeds.set(item.idx, spd);
             updateDockHeading();
-          });
+          }, parallelChunkStreams);
           activeSpeeds.delete(item.idx);
           completedCount++;
           updateDockHeading();
@@ -3857,7 +3858,7 @@
       await executeBatchUpload(formattedItems, `Uploading folder (${items.length} files)...`);
     }
 
-    function uploadSingleItem(file, folder, idx, onSpeedUpdate) {
+    function uploadSingleItemDirect(file, folder, idx, onSpeedUpdate) {
       return new Promise((resolve) => {
         const bar = document.getElementById(`upBar_${idx}`);
         const pctEl = document.getElementById(`upPct_${idx}`);
@@ -3936,6 +3937,201 @@
         xhr.setRequestHeader('x-auth', getAdminPass());
         xhr.send(formData);
       });
+    }
+
+    async function uploadSingleItemChunked(file, folder, idx, onSpeedUpdate, parallelStreams = 3) {
+      const bar = document.getElementById(`upBar_${idx}`);
+      const pctEl = document.getElementById(`upPct_${idx}`);
+      const speedEl = document.getElementById(`upSpeed_${idx}`);
+      const sizeEl = document.getElementById(`upSize_${idx}`);
+
+      const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB chunks
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      const uploadId = 'up_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 9);
+
+      // Track loaded bytes per chunk
+      const chunkBytesLoaded = new Array(totalChunks).fill(0);
+      let lastTotalLoaded = 0;
+      let lastTime = performance.now();
+      let speedRolling = 0;
+      const startTime = performance.now();
+      let isFinalizing = false;
+
+      function updateProgress() {
+        if (isFinalizing) return;
+        const totalLoaded = chunkBytesLoaded.reduce((a, b) => a + b, 0);
+        const now = performance.now();
+        const timeDelta = (now - lastTime) / 1000;
+
+        if (timeDelta >= 0.2) {
+          const bytesDelta = totalLoaded - lastTotalLoaded;
+          const instantSpeed = Math.max(0, bytesDelta / timeDelta);
+          speedRolling = speedRolling === 0 ? instantSpeed : (speedRolling * 0.7 + instantSpeed * 0.3);
+          lastTotalLoaded = totalLoaded;
+          lastTime = now;
+          if (onSpeedUpdate) onSpeedUpdate(speedRolling);
+        }
+
+        const pct = Math.min(99, Math.round((totalLoaded / file.size) * 100));
+        if (bar) bar.style.width = pct + '%';
+        if (pctEl) pctEl.innerText = pct + '%';
+
+        const speedStr = speedRolling > 0 ? formatBytes(speedRolling) + '/s' : 'Calculating...';
+        const loadedStr = formatBytes(totalLoaded);
+        const totalStr = formatBytes(file.size);
+        if (sizeEl) sizeEl.innerText = `${loadedStr} / ${totalStr}`;
+
+        const completedChunks = chunkBytesLoaded.filter((b, i) => {
+          const expected = (i === totalChunks - 1) ? (file.size - (totalChunks - 1) * CHUNK_SIZE) : CHUNK_SIZE;
+          return b >= expected;
+        }).length;
+
+        const remainingBytes = file.size - totalLoaded;
+        const etaSec = speedRolling > 0 ? Math.ceil(remainingBytes / speedRolling) : 0;
+        const etaStr = etaSec > 0 ? (etaSec > 60 ? `~${Math.ceil(etaSec / 60)}m left` : `~${etaSec}s left`) : '';
+
+        if (speedEl) {
+          speedEl.innerHTML = `⚡ <b>${speedStr}</b> • Chunks ${completedChunks}/${totalChunks} ${etaStr ? '• ' + etaStr : ''}`;
+        }
+      }
+
+      let nextChunkIdx = 0;
+      let uploadError = null;
+      let finalResponse = null;
+
+      async function uploadChunkWithRetry(chunkIdx, maxRetries = 3) {
+        const start = chunkIdx * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunkBlob = file.slice(start, end);
+        const chunkSize = end - start;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          if (uploadError) return;
+          try {
+            const res = await new Promise((resChunk, rejChunk) => {
+              const xhr = new XMLHttpRequest();
+              const formData = new FormData();
+              formData.append('upload_id', uploadId);
+              formData.append('chunk_index', chunkIdx);
+              formData.append('total_chunks', totalChunks);
+              formData.append('chunk_size', CHUNK_SIZE);
+              formData.append('total_size', file.size);
+              formData.append('file_name', file.name);
+              formData.append('folder', folder);
+              formData.append('chunk', chunkBlob, file.name);
+
+              xhr.upload.onprogress = (e) => {
+                if (e.lengthComputable) {
+                  chunkBytesLoaded[chunkIdx] = Math.min(chunkSize, e.loaded);
+                  updateProgress();
+                }
+              };
+
+              xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                  chunkBytesLoaded[chunkIdx] = chunkSize;
+                  updateProgress();
+                  try {
+                    resChunk(JSON.parse(xhr.responseText));
+                  } catch (e) {
+                    resChunk({});
+                  }
+                } else {
+                  rejChunk(new Error(`Server error ${xhr.status}`));
+                }
+              };
+
+              xhr.onerror = () => rejChunk(new Error('Network error'));
+              xhr.ontimeout = () => rejChunk(new Error('Connection timeout'));
+              xhr.timeout = 180000; // 3 min timeout
+
+              xhr.open('POST', '/api/upload/chunk');
+              xhr.setRequestHeader('x-auth', getAdminPass());
+              xhr.send(formData);
+            });
+
+            if (res && res.status === 'ok') {
+              finalResponse = res;
+            }
+            return;
+          } catch (err) {
+            console.warn(`Chunk ${chunkIdx} failed (attempt ${attempt}):`, err);
+            chunkBytesLoaded[chunkIdx] = 0;
+            updateProgress();
+            if (attempt === maxRetries) {
+              throw err;
+            }
+            await new Promise(r => setTimeout(r, 1000 * attempt));
+          }
+        }
+      }
+
+      async function chunkWorker() {
+        while (nextChunkIdx < totalChunks && !uploadError) {
+          const cIdx = nextChunkIdx++;
+          try {
+            await uploadChunkWithRetry(cIdx);
+          } catch (err) {
+            uploadError = err;
+          }
+        }
+      }
+
+      if (speedEl) speedEl.innerText = '⚡ Starting parallel upload...';
+
+      const workerPromises = [];
+      const streams = Math.min(parallelStreams || 3, totalChunks);
+      for (let i = 0; i < streams; i++) {
+        workerPromises.push(chunkWorker());
+      }
+
+      await Promise.all(workerPromises);
+
+      if (uploadError) {
+        if (pctEl) { pctEl.innerText = '✕'; pctEl.style.color = 'var(--danger)'; }
+        if (speedEl) { speedEl.innerHTML = `<span style="color:var(--danger);">${uploadError.message}</span>`; }
+        if (onSpeedUpdate) onSpeedUpdate(0);
+        return;
+      }
+
+      isFinalizing = true;
+      if (bar) bar.style.width = '100%';
+      if (pctEl) pctEl.innerText = '100%';
+      if (sizeEl) sizeEl.innerText = `${formatBytes(file.size)} / ${formatBytes(file.size)}`;
+      if (speedEl) speedEl.innerHTML = `<span style="color:var(--primary); font-weight:600;">🚀 Telegram Cloud syncing...</span>`;
+
+      // Fallback polling if final chunk response hasn't returned yet
+      if (!finalResponse || finalResponse.status !== 'ok') {
+        for (let poll = 0; poll < 30; poll++) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const resp = await fetch(`/api/upload/chunk/status?upload_id=${encodeURIComponent(uploadId)}`, {
+              headers: { 'x-auth': getAdminPass() }
+            });
+            const data = await resp.json();
+            if (data && data.status === 'ok') {
+              finalResponse = data;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+
+      const duration = ((performance.now() - startTime) / 1000).toFixed(1);
+      const avgSpeed = formatBytes(file.size / Math.max(0.1, duration)) + '/s';
+
+      if (bar) { bar.style.width = '100%'; bar.style.background = 'var(--success)'; }
+      if (pctEl) { pctEl.innerText = '100%'; pctEl.style.color = 'var(--success)'; }
+      if (speedEl) { speedEl.innerHTML = `<span style="color:var(--success);">✔ Completed in ${duration}s (avg ${avgSpeed})</span>`; }
+      if (onSpeedUpdate) onSpeedUpdate(0);
+    }
+
+    function uploadSingleItem(file, folder, idx, onSpeedUpdate, parallelStreams = 3) {
+      if (file.size > 5 * 1024 * 1024) {
+        return uploadSingleItemChunked(file, folder, idx, onSpeedUpdate, parallelStreams);
+      } else {
+        return uploadSingleItemDirect(file, folder, idx, onSpeedUpdate);
+      }
     }
 
     // Drag & Drop Fullscreen Overlay
