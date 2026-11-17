@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Header, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, LinkPreviewOptions
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -331,6 +331,30 @@ app = FastAPI(lifespan=lifespan)
 # Telegram Bot Interactive PM Handlers
 # ========================================================
 
+def get_link_preview_opts(disable_preview: bool = True):
+    try:
+        return LinkPreviewOptions(is_disabled=disable_preview)
+    except Exception:
+        return None
+
+async def reply_text_safe(message: Message, text: str, reply_markup=None, disable_preview: bool = True):
+    opts = get_link_preview_opts(disable_preview)
+    if opts is not None:
+        try:
+            return await message.reply_text(text, reply_markup=reply_markup, link_preview_options=opts)
+        except TypeError:
+            pass
+    return await message.reply_text(text, reply_markup=reply_markup)
+
+async def edit_text_safe(message: Message, text: str, reply_markup=None, disable_preview: bool = True):
+    opts = get_link_preview_opts(disable_preview)
+    if opts is not None:
+        try:
+            return await message.edit_text(text, reply_markup=reply_markup, link_preview_options=opts)
+        except TypeError:
+            pass
+    return await message.edit_text(text, reply_markup=reply_markup)
+
 @bot.on_message(filters.private & filters.command(["start", "help"]))
 async def bot_start_handler(client: Client, message: Message):
     welcome_text = (
@@ -343,17 +367,19 @@ async def bot_start_handler(client: Client, message: Message):
         "💡 *Tip: File bhejte waqt caption me folder ka naam likh sakte hain, jaise `/movies` ya `/notes`.*\n\n"
         f"🌐 **Web Drive UI:** {BASE_URL}"
     )
-    await message.reply_text(
+    await reply_text_safe(
+        message,
         welcome_text,
-        disable_web_page_preview=True,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🌐 Open Web Drive", url=BASE_URL)]
-        ])
+        ]),
+        disable_preview=True
     )
 
 @bot.on_message(filters.private & filters.command(["id", "myid"]))
 async def bot_id_handler(client: Client, message: Message):
-    await message.reply_text(
+    await reply_text_safe(
+        message,
         f"👤 **Your Telegram User ID:** `{message.from_user.id}`\n"
         f"📛 **Username:** @{message.from_user.username or 'none'}"
     )
@@ -366,7 +392,8 @@ async def bot_id_handler(client: Client, message: Message):
 )
 async def bot_media_receiver(client: Client, message: Message):
     if not is_telegram_user_allowed(message.from_user):
-        await message.reply_text(
+        await reply_text_safe(
+            message,
             f"⛔ **Access Restricted**\n\n"
             f"Aap is bot par files upload karne ke liye authorized nahi hain.\n"
             f"Aapka Telegram ID: `{message.from_user.id}`\n\n"
@@ -374,7 +401,7 @@ async def bot_media_receiver(client: Client, message: Message):
         )
         return
 
-    status_msg = await message.reply_text("⚡ Processing file & generating stream link...", quote=True)
+    status_msg = await reply_text_safe(message, "⚡ Processing file & generating stream link...")
 
     # Determine media object
     media = (
@@ -423,7 +450,10 @@ async def bot_media_receiver(client: Client, message: Message):
             caption=f"Folder: `{folder}` | File: `{file_name}`"
         )
     except Exception as e:
-        await status_msg.edit_text(f"❌ Failed to store file in Telegram Channel: {e}")
+        if status_msg:
+            await edit_text_safe(status_msg, f"❌ Failed to store file in Telegram Channel: {e}")
+        else:
+            await reply_text_safe(message, f"❌ Failed to store file in Telegram Channel: {e}")
         return
 
     # Generate unique share token
@@ -469,11 +499,15 @@ async def bot_media_receiver(client: Client, message: Message):
         ]
     ])
 
-    await status_msg.edit_text(response_text, reply_markup=keyboard, disable_web_page_preview=True)
+    if status_msg:
+        await edit_text_safe(status_msg, response_text, reply_markup=keyboard, disable_preview=True)
+    else:
+        await reply_text_safe(message, response_text, reply_markup=keyboard, disable_preview=True)
 
 @bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "id", "myid"]))
 async def bot_text_fallback(client: Client, message: Message):
-    await message.reply_text(
+    await reply_text_safe(
+        message,
         "📁 **Send or forward any file, video, or document here!**\n\n"
         "Mai aapko turant online browser me play karne aur high-speed download karne ka direct link de dunga.\n\n"
         "💡 *Tip: File ke sath caption me `/movies` ya `/notes` likhenge toh wo us specific folder me save hogi.*"
