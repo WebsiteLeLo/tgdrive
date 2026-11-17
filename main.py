@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Header, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, LinkPreviewOptions
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, LinkPreviewOptions, CallbackQuery
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -92,6 +92,31 @@ def init_db():
     for (fid, fpath) in c.fetchall():
         c.execute("UPDATE folders SET share_token = ? WHERE id = ?", (secrets.token_urlsafe(14), fid))
 
+    # Check user_id in files
+    c.execute("PRAGMA table_info(files)")
+    f_cols = [col[1] for col in c.fetchall()]
+    if "user_id" not in f_cols:
+        c.execute("ALTER TABLE files ADD COLUMN user_id INTEGER")
+
+    # Check user_id in folders
+    c.execute("PRAGMA table_info(folders)")
+    fo_cols = [col[1] for col in c.fetchall()]
+    if "user_id" not in fo_cols:
+        c.execute("ALTER TABLE folders ADD COLUMN user_id INTEGER")
+
+    # User registry table for isolated user folder spaces
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS bot_users (
+            user_id INTEGER PRIMARY KEY,
+            username TEXT,
+            first_name TEXT,
+            base_folder TEXT NOT NULL,
+            active_folder TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     # Ensure all distinct folders from files table exist in folders table
     c.execute("SELECT DISTINCT folder FROM files WHERE folder IS NOT NULL")
     for (fld,) in c.fetchall():
@@ -105,7 +130,7 @@ def init_db():
 
 init_db()
 
-def get_folder_share_token(path: str) -> str:
+def get_folder_share_token(path: str, user_id: int | None = None) -> str:
     path = path.rstrip("/") or "/"
     conn = sqlite3.connect("drive.db")
     c = conn.cursor()
@@ -113,9 +138,12 @@ def get_folder_share_token(path: str) -> str:
     row = c.fetchone()
     if row and row[0]:
         token = row[0]
+        if user_id:
+            c.execute("UPDATE folders SET user_id = ? WHERE path = ? AND user_id IS NULL", (user_id, path))
+            conn.commit()
     else:
         token = secrets.token_urlsafe(14)
-        c.execute("INSERT INTO folders (path, share_token) VALUES (?, ?) ON CONFLICT(path) DO UPDATE SET share_token = ?", (path, token, token))
+        c.execute("INSERT INTO folders (path, share_token, user_id) VALUES (?, ?, ?) ON CONFLICT(path) DO UPDATE SET share_token = ?", (path, token, user_id, token))
         conn.commit()
     conn.close()
     return token
@@ -328,10 +356,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # ========================================================
-# Telegram Bot Interactive PM Handlers
+# Telegram Bot Interactive PM Handlers & User Isolation
 # ========================================================
-
-user_active_folder: dict[int, str] = {}
 
 def get_link_preview_opts(disable_preview: bool = True):
     try:
@@ -357,6 +383,91 @@ async def edit_text_safe(message: Message, text: str, reply_markup=None, disable
             pass
     return await message.edit_text(text, reply_markup=reply_markup)
 
+def get_or_create_bot_user(user) -> dict:
+    if not user:
+        return {"user_id": 0, "username": "", "first_name": "Anonymous", "base_folder": "/Telegram", "active_folder": "/Telegram"}
+    
+    user_id = user.id
+    username = getattr(user, "username", "") or ""
+    first_name = getattr(user, "first_name", "") or ""
+
+    conn = sqlite3.connect("drive.db")
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM bot_users WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    if row:
+        data = dict(row)
+        if data.get("username") != username or data.get("first_name") != first_name:
+            c.execute(
+                "UPDATE bot_users SET username = ?, first_name = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                (username, first_name, user_id)
+            )
+            conn.commit()
+            data["username"] = username
+            data["first_name"] = first_name
+        conn.close()
+        return data
+
+    # Create new isolated base folder for this user
+    if username:
+        clean_u = re.sub(r'[^a-zA-Z0-9_]', '', username)
+        base_folder = f"/@{clean_u}" if clean_u else f"/user_{user_id}"
+    else:
+        clean_fn = re.sub(r'[^a-zA-Z0-9_]', '', first_name)
+        base_folder = f"/user_{clean_fn}_{user_id}" if clean_fn else f"/user_{user_id}"
+
+    # Check collision with other users
+    c.execute("SELECT user_id FROM bot_users WHERE base_folder = ?", (base_folder,))
+    if c.fetchone():
+        base_folder = f"{base_folder}_{user_id}"
+
+    active_folder = base_folder
+    c.execute(
+        "INSERT INTO bot_users (user_id, username, first_name, base_folder, active_folder) VALUES (?, ?, ?, ?, ?)",
+        (user_id, username, first_name, base_folder, active_folder)
+    )
+    conn.commit()
+    conn.close()
+
+    # Ensure base folder is in folders table with a share token
+    get_folder_share_token(base_folder, user_id)
+
+    return {
+        "user_id": user_id,
+        "username": username,
+        "first_name": first_name,
+        "base_folder": base_folder,
+        "active_folder": active_folder
+    }
+
+def set_user_active_folder(user_id: int, folder_path: str):
+    conn = sqlite3.connect("drive.db")
+    c = conn.cursor()
+    c.execute("UPDATE bot_users SET active_folder = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?", (folder_path, user_id))
+    conn.commit()
+    conn.close()
+
+def get_relative_folder_name(full_path: str, base_folder: str) -> str:
+    if not full_path or full_path == base_folder or full_path == "/":
+        return "🏠 Root"
+    if full_path.startswith(base_folder + "/"):
+        rel = full_path[len(base_folder):]
+        return rel if rel.startswith("/") else f"/{rel}"
+    return full_path
+
+def resolve_user_folder_path(user_base: str, input_path: str) -> str:
+    clean = (input_path or "").strip()
+    if not clean or clean.lower() in ("/", "root", "home", "/root", "/home"):
+        return user_base
+    if clean.startswith(user_base + "/") or clean == user_base:
+        return clean
+    sub = clean.lstrip("/").rstrip("/")
+    parts = [p.strip() for p in sub.split("/") if p.strip()]
+    if not parts:
+        return user_base
+    return f"{user_base}/{'/'.join(parts)}"
+
 def parse_folder_command(text: str) -> str | None:
     if not text:
         return None
@@ -373,36 +484,106 @@ def parse_folder_command(text: str) -> str | None:
     if clean.startswith("/") and not clean.startswith("//"):
         cmd = clean.split()[0]
         # Ignore reserved system commands
-        if cmd.lower() in ("/start", "/help", "/id", "/myid", "/folders", "/resetfolder"):
+        if cmd.lower() in (
+            "/start", "/help", "/id", "/myid", "/folders", "/myfolders", "/list",
+            "/newfolder", "/mkdir", "/create", "/share", "/sharefolder",
+            "/root", "/home", "/resetfolder", "/files", "/status"
+        ):
             return None
         f = cmd.rstrip("/")
         return f if f else "/"
     return None
 
+async def build_folders_view(u: dict):
+    conn = sqlite3.connect("drive.db")
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, path, share_token FROM folders 
+        WHERE path = ? OR path LIKE ? 
+        ORDER BY CASE WHEN path = ? THEN 0 ELSE 1 END, path ASC
+    """, (u["base_folder"], f"{u['base_folder']}/%", u["base_folder"]))
+    user_folders = c.fetchall()
+
+    c.execute("""
+        SELECT folder, COUNT(*), COALESCE(SUM(size), 0) FROM files 
+        WHERE folder = ? OR folder LIKE ? 
+        GROUP BY folder
+    """, (u["base_folder"], f"{u['base_folder']}/%"))
+    counts_map = {r[0]: (r[1], r[2]) for r in c.fetchall()}
+    conn.close()
+
+    rel_active = get_relative_folder_name(u["active_folder"], u["base_folder"])
+    msg_lines = [
+        "📂 **Aapka Personal TG-Drive Space** 🚀\n",
+        f"👤 **User Space:** `{u['base_folder']}`",
+        f"🎯 **Active Target:** `{rel_active}`\n",
+        "────────────────────────"
+    ]
+
+    buttons = []
+    for fid, fpath, ftoken in user_folders:
+        rel_name = get_relative_folder_name(fpath, u["base_folder"])
+        cnt, sz = counts_map.get(fpath, (0, 0))
+        is_active = (fpath == u["active_folder"])
+        active_badge = " `[Active ✅]`" if is_active else ""
+        fshare = f"{BASE_URL}/share/{ftoken}"
+        
+        icon = "🏠" if rel_name == "🏠 Root" else "📁"
+        msg_lines.append(f"\n{icon} **{rel_name}**{active_badge}")
+        msg_lines.append(f"   📊 {cnt} files • {format_size_human(sz)}")
+        msg_lines.append(f"   🔗 [Open / Share Link]({fshare})")
+
+        if not is_active:
+            btn_switch = InlineKeyboardButton(f"📂 Switch {rel_name}", callback_data=f"cb:sw:{fid}")
+            btn_share = InlineKeyboardButton("🔗 Share", callback_data=f"cb:sh:{fid}")
+            buttons.append([btn_switch, btn_share])
+
+    buttons.append([
+        InlineKeyboardButton("🏠 Switch to Root", callback_data="cb:root"),
+        InlineKeyboardButton("🔗 Share Active", callback_data="cb:share_active")
+    ])
+
+    msg_lines.append("\n────────────────────────")
+    msg_lines.append("💡 *Naya folder banane ke liye `/newfolder <name>` likhein.*")
+    msg_lines.append("💡 *Fast switch ke liye bas command bhejein (jaise `/movies`).*")
+
+    return "\n".join(msg_lines), InlineKeyboardMarkup(buttons[:10])
+
 @bot.on_message(filters.private & filters.text)
 async def bot_text_router(client: Client, message: Message):
     text = (message.text or "").strip()
-    user_id = message.from_user.id if message.from_user else 0
+    u = get_or_create_bot_user(message.from_user)
 
     # 1. /start or /help
     if text.lower() in ("/start", "/help"):
-        current_f = user_active_folder.get(user_id, "/Telegram")
+        rel_active = get_relative_folder_name(u["active_folder"], u["base_folder"])
+        root_token = get_folder_share_token(u["base_folder"], u["user_id"])
+        root_share_url = f"{BASE_URL}/share/{root_token}"
+
         welcome_text = (
             "👋 **Namaste! Welcome to TG-Cloud Drive Bot** 🚀\n\n"
-            "Mujhe koi bhi **video, movie, document, audio, ya file** forward ya direct send kijiye.\n\n"
-            "Mai aapko turant:\n"
-            "• 🎬 **Web Browser Streaming Link** (Online video player ke sath)\n"
-            "• ⚡ **Direct High-Speed Download Link** (Range & multi-thread enabled)\n"
-            "• 📂 TG-Drive me auto-save kar dunga!\n\n"
-            f"🎯 **Current Active Folder:** `{current_f}`\n\n"
-            "💡 *Folder select karne ke liye bas `/movies` ya `/notes` likh kar bhej dijiye.*\n\n"
-            f"🌐 **Web Drive UI:** {BASE_URL}"
+            f"Aapka personal dedicated drive space tayyar hai:\n"
+            f"👤 **User Space:** `{u['base_folder']}`\n"
+            f"🎯 **Active Target:** `{rel_active}`\n\n"
+            "Mujhe koi bhi **video, movie, document, ya audio** forward ya send kijiye, wo seedha aapke folder me store hogi!\n\n"
+            "✨ **Main Commands:**\n"
+            "• `/folders` - Apne sabhi folders aur file counts dekhein\n"
+            "• `/newfolder <name>` - Naya folder banayein (jaise `/newfolder Movies`)\n"
+            "• `/share` - Apne current active folder ka public share link paayein\n"
+            "• `/root` ya `/resetfolder` - Wapas apne main root folder me jayein\n"
+            "• `/files` - Current folder ki uploaded files dekhein\n"
+            "• *Fast Switch:* Bas `/<folder_name>` likhein (e.g. `/movies` ya `/notes`)\n\n"
+            f"🌐 **Aapka Personal Web Drive Link:**\n{root_share_url}"
         )
         await reply_text_safe(
             message,
             welcome_text,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🌐 Open Web Drive", url=BASE_URL)]
+                [InlineKeyboardButton("🌐 Open My Drive Space", url=root_share_url)],
+                [
+                    InlineKeyboardButton("📂 My Folders", callback_data="cb:myfolders"),
+                    InlineKeyboardButton("🔗 Share Active Folder", callback_data="cb:share_active")
+                ]
             ]),
             disable_preview=True
         )
@@ -410,49 +591,150 @@ async def bot_text_router(client: Client, message: Message):
 
     # 2. /id or /myid
     if text.lower() in ("/id", "/myid"):
+        rel_active = get_relative_folder_name(u["active_folder"], u["base_folder"])
         await reply_text_safe(
             message,
-            f"👤 **Your Telegram User ID:** `{message.from_user.id}`\n"
-            f"📛 **Username:** @{message.from_user.username or 'none'}"
+            f"👤 **Your Telegram ID:** `{message.from_user.id}`\n"
+            f"📛 **Username:** @{message.from_user.username or 'none'}\n"
+            f"📂 **Personal Space:** `{u['base_folder']}`\n"
+            f"🎯 **Active Folder:** `{rel_active}`"
         )
         return
 
-    # 3. /resetfolder
-    if text.lower() == "/resetfolder":
-        user_active_folder[user_id] = "/Telegram"
+    # 3. /folders or /myfolders or /list
+    if text.lower() in ("/folders", "/myfolders", "/list"):
+        msg_text, markup = await build_folders_view(u)
+        await reply_text_safe(message, msg_text, reply_markup=markup, disable_preview=True)
+        return
+
+    # 4. /newfolder or /mkdir or /create
+    if text.lower().startswith(("/newfolder", "/mkdir", "/create")):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await reply_text_safe(
+                message,
+                "⚠️ **Folder ka naam likhein!**\n\n"
+                "Example:\n"
+                "• `/newfolder Movies`\n"
+                "• `/newfolder Chemistry/Lec1`\n"
+                "• `/newfolder WebSeries`"
+            )
+            return
+
+        raw_name = parts[1].strip()
+        target_path = resolve_user_folder_path(u["base_folder"], raw_name)
+        token = get_folder_share_token(target_path, u["user_id"])
+        set_user_active_folder(u["user_id"], target_path)
+
+        rel_name = get_relative_folder_name(target_path, u["base_folder"])
+        share_url = f"{BASE_URL}/share/{token}"
+
         await reply_text_safe(
             message,
-            "🔄 **Folder Reset**: Default folder `/Telegram` select ho gaya hai.\n\n"
-            "Naya folder select karne ke liye bas type kijiye (e.g. `/movies` ya `/notes`)."
+            "✅ **Naya Folder Ban Gaya & Active Set Ho Gaya!** 📂\n\n"
+            f"📁 **Folder:** `{rel_name}`\n"
+            f"🎯 **Full Path:** `{target_path}`\n\n"
+            f"🌐 **Public Web Share Link:**\n`{share_url}`\n\n"
+            f"Ab aap jo bhi video ya file send/forward karenge, wo automatically **`{rel_name}`** me save hogi! 🚀",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🌐 Open {rel_name} in Web", url=share_url)],
+                [InlineKeyboardButton("📂 All Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
         )
         return
 
-    # 4. /folders
-    if text.lower() == "/folders":
+    # 5. /share or /sharefolder
+    if text.lower().startswith(("/share", "/sharefolder")):
+        parts = text.split(maxsplit=1)
+        if len(parts) > 1 and parts[1].strip():
+            target_path = resolve_user_folder_path(u["base_folder"], parts[1].strip())
+        else:
+            target_path = u["active_folder"]
+
+        token = get_folder_share_token(target_path, u["user_id"])
+        rel_name = get_relative_folder_name(target_path, u["base_folder"])
+        share_url = f"{BASE_URL}/share/{token}"
+
+        await reply_text_safe(
+            message,
+            "🌐 **Public Folder Share Link Tayyar Hai!** 🔗\n\n"
+            f"📁 **Folder:** `{rel_name}`\n\n"
+            f"🔗 **Link:**\n`{share_url}`\n\n"
+            "💡 *Is link ko kisi ke sath bhi share karein. Koi bhi browser me bina login ke sabhi files dekh sakta hai aur video stream kar sakta hai!*",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🌐 Open {rel_name}", url=share_url)],
+                [InlineKeyboardButton("📂 View All Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    # 6. /resetfolder or /root or /home
+    if text.lower() in ("/resetfolder", "/root", "/home"):
+        set_user_active_folder(u["user_id"], u["base_folder"])
+        root_token = get_folder_share_token(u["base_folder"], u["user_id"])
+        root_share_url = f"{BASE_URL}/share/{root_token}"
+
+        await reply_text_safe(
+            message,
+            "🏠 **Root Folder Selected!**\n\n"
+            f"🎯 Active folder wapas root (`{u['base_folder']}`) set ho gaya hai.\n\n"
+            "Ab aane wali sabhi files aapke main space me store hongi.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌐 Open My Drive", url=root_share_url)],
+                [InlineKeyboardButton("📂 View Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    # 7. /files or /status
+    if text.lower() in ("/files", "/status"):
+        rel_active = get_relative_folder_name(u["active_folder"], u["base_folder"])
         conn = sqlite3.connect("drive.db")
         c = conn.cursor()
-        c.execute("SELECT DISTINCT path FROM folders WHERE path != '/' ORDER BY path")
-        all_folders = [r[0] for r in c.fetchall()]
+        c.execute("SELECT name, size, share_token, message_id FROM files WHERE folder = ? ORDER BY id DESC LIMIT 15", (u["active_folder"],))
+        files = c.fetchall()
         conn.close()
-        current = user_active_folder.get(user_id, "/Telegram")
-        folder_list_str = "\n".join([f"• `{f}`" for f in all_folders[:20]]) if all_folders else "*(No custom folders yet)*"
+
+        if not files:
+            await reply_text_safe(
+                message,
+                f"📂 **Folder:** `{rel_active}`\n\n"
+                "*(Is folder me abhi koi files nahi hain.)*\n\n"
+                "💡 Video ya koi bhi file bhej kar upload karein!"
+            )
+            return
+
+        lines = [f"📁 **Files in `{rel_active}` ({len(files)} items):**\n"]
+        for name, sz, stk, mid in files:
+            stream_link = f"{BASE_URL}/f/{stk}"
+            lines.append(f"• `{name}` ({format_size_human(sz)})\n  🎬 [Stream / Watch]({stream_link})")
+
+        token = get_folder_share_token(u["active_folder"], u["user_id"])
+        fshare = f"{BASE_URL}/share/{token}"
         await reply_text_safe(
             message,
-            f"📂 **Current Active Folder:** `{current}`\n\n"
-            f"📁 **Existing Folders in Drive:**\n{folder_list_str}\n\n"
-            "💡 Naya folder set karne ke liye bas `/folder_name` type kijiye (jaise `/movies`)."
+            "\n".join(lines),
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🌐 Open {rel_active} in Browser", url=fshare)]
+            ]),
+            disable_preview=True
         )
         return
 
-    # 5. Check if text is a folder path (e.g. "/movies" or "/Chemistry/Lec1" or "/folder /movies")
-    folder_path = parse_folder_command(text)
-    if folder_path:
+    # 8. Check if text is a folder path (e.g. "/movies" or "/Chemistry/Lec1" or "/folder /movies")
+    folder_cmd = parse_folder_command(text)
+    if folder_cmd:
+        target_path = resolve_user_folder_path(u["base_folder"], folder_cmd)
+        token = get_folder_share_token(target_path, u["user_id"])
+        rel_name = get_relative_folder_name(target_path, u["base_folder"])
+
         # Check if user is replying to an existing file message to MOVE it
         if message.reply_to_message:
             replied = message.reply_to_message
             target_token = None
-
-            # Look for /f/{token} in replied text or buttons
             m = re.search(r'/f/([a-zA-Z0-9_\-]+)', replied.text or "")
             if m:
                 target_token = m.group(1)
@@ -470,50 +752,169 @@ async def bot_text_router(client: Client, message: Message):
             if target_token:
                 conn = sqlite3.connect("drive.db")
                 c = conn.cursor()
-                c.execute("INSERT OR IGNORE INTO folders (path, share_token) VALUES (?, ?)", (folder_path, secrets.token_urlsafe(14)))
-                c.execute("UPDATE files SET folder = ? WHERE share_token = ?", (folder_path, target_token))
+                c.execute("UPDATE files SET folder = ? WHERE share_token = ?", (target_path, target_token))
                 c.execute("SELECT name FROM files WHERE share_token = ?", (target_token,))
                 row = c.fetchone()
                 conn.commit()
                 conn.close()
 
                 file_display_name = row[0] if row else "File"
-                user_active_folder[user_id] = folder_path
+                set_user_active_folder(u["user_id"], target_path)
+                share_url = f"{BASE_URL}/share/{token}"
                 await reply_text_safe(
                     message,
                     f"✅ **Moved Successfully!**\n\n"
-                    f"📄 `{file_display_name}` ko **`{folder_path}`** folder me move kar diya gaya hai.\n\n"
-                    f"🎯 Aane wali sabhi forwarded/uploaded files ke liye bhi active folder **`{folder_path}`** set ho gaya hai!"
+                    f"📄 `{file_display_name}` ko **`{rel_name}`** folder me move kar diya gaya hai.\n\n"
+                    f"🎯 Aane wali sabhi files ke liye bhi active folder **`{rel_name}`** set ho gaya hai!",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton(f"🌐 Open {rel_name}", url=share_url)]
+                    ]),
+                    disable_preview=True
                 )
                 return
 
-        # If not replying to a specific message, update the active folder for upcoming uploads!
-        user_active_folder[user_id] = folder_path
-        conn = sqlite3.connect("drive.db")
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO folders (path, share_token) VALUES (?, ?)", (folder_path, secrets.token_urlsafe(14)))
-        conn.commit()
-        conn.close()
-
+        # If not replying, switch active folder
+        set_user_active_folder(u["user_id"], target_path)
+        share_url = f"{BASE_URL}/share/{token}"
         await reply_text_safe(
             message,
-            f"📂 **Active Folder Set:** `{folder_path}`\n\n"
-            f"Ab aap jo bhi files ya forwarded videos bhejenge, wo automatically **`{folder_path}`** folder me store hongi! 🚀\n\n"
-            f"💡 *Abhi apni video/file forward kijiye!*"
+            f"📂 **Active Folder Set:** `{rel_name}`\n\n"
+            f"Ab aap jo bhi files ya forwarded videos bhejenge, wo automatically **`{rel_name}`** folder me store hongi! 🚀\n\n"
+            f"💡 *Abhi apni video/file forward kijiye!*",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🌐 Open {rel_name}", url=share_url)],
+                [InlineKeyboardButton("📂 My Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
         )
         return
 
     # Fallback for generic text
-    current_f = user_active_folder.get(user_id, "/Telegram")
+    rel_active = get_relative_folder_name(u["active_folder"], u["base_folder"])
     await reply_text_safe(
         message,
         f"📁 **Send or forward any file, video, or document here!**\n\n"
-        f"🎯 **Target Folder:** `{current_f}`\n\n"
+        f"🎯 **Target Folder:** `{rel_active}`\n\n"
         "💡 *Tips:*\n"
-        "• Kisi folder me save karne ke liye pehle `/movies` ya `/notes` bhej dijiye.\n"
-        "• Kisi purani file ko move karne ke liye uske message ko reply karke `/movies` likhiye.\n"
-        "• Folder reset karne ke liye `/resetfolder` likhiye."
+        "• Naya folder banane ke liye `/newfolder <name>` likhein.\n"
+        "• Folder select karne ke liye bas `/movies` ya `/notes` bhej dijiye.\n"
+        "• Sabhi folders dekhne ke liye `/folders` likhein.\n"
+        "• Folder ka share link paane ke liye `/share` likhein.\n"
+        "• Root folder wapas select karne ke liye `/root` likhein."
     )
+
+@bot.on_callback_query()
+async def bot_callback_router(client: Client, query: CallbackQuery):
+    data = query.data or ""
+    user = query.from_user
+    if not user:
+        return
+    u = get_or_create_bot_user(user)
+
+    if data.startswith("cb:sw:"):
+        fid_str = data.split(":", 2)[2]
+        try:
+            fid = int(fid_str)
+        except ValueError:
+            return
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("SELECT path, share_token FROM folders WHERE id = ?", (fid,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            await query.answer("Folder not found!", show_alert=True)
+            return
+
+        fpath, ftoken = row
+        # Security check: verify this folder belongs to this user
+        if not (fpath == u["base_folder"] or fpath.startswith(u["base_folder"] + "/")):
+            await query.answer("Aap sirf apne folders me switch kar sakte hain!", show_alert=True)
+            return
+
+        set_user_active_folder(u["user_id"], fpath)
+        rel_name = get_relative_folder_name(fpath, u["base_folder"])
+        await query.answer(f"Switched to {rel_name} ✅")
+        share_url = f"{BASE_URL}/share/{ftoken}"
+        await reply_text_safe(
+            query.message,
+            f"📂 **Active Folder Switched to:** `{rel_name}`\n\n"
+            f"Ab sabhi uploaded/forwarded files yahan save hongi! 🚀",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🌐 Open {rel_name}", url=share_url)],
+                [InlineKeyboardButton("📂 View Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    elif data.startswith("cb:sh:"):
+        fid_str = data.split(":", 2)[2]
+        try:
+            fid = int(fid_str)
+        except ValueError:
+            return
+        conn = sqlite3.connect("drive.db")
+        c = conn.cursor()
+        c.execute("SELECT path, share_token FROM folders WHERE id = ?", (fid,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            await query.answer("Folder not found!", show_alert=True)
+            return
+
+        fpath, ftoken = row
+        rel_name = get_relative_folder_name(fpath, u["base_folder"])
+        share_url = f"{BASE_URL}/share/{ftoken}"
+        await query.answer("Share link fetched!")
+        await reply_text_safe(
+            query.message,
+            f"🌐 **Public Share Link for `{rel_name}`:**\n\n"
+            f"`{share_url}`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🌐 Open {rel_name}", url=share_url)]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    elif data == "cb:share_active":
+        token = get_folder_share_token(u["active_folder"], u["user_id"])
+        rel_name = get_relative_folder_name(u["active_folder"], u["base_folder"])
+        share_url = f"{BASE_URL}/share/{token}"
+        await query.answer("Active folder share link!")
+        await reply_text_safe(
+            query.message,
+            f"🌐 **Share Link for Active Folder (`{rel_name}`):**\n\n"
+            f"`{share_url}`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🌐 Open {rel_name}", url=share_url)]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    elif data == "cb:root":
+        set_user_active_folder(u["user_id"], u["base_folder"])
+        token = get_folder_share_token(u["base_folder"], u["user_id"])
+        share_url = f"{BASE_URL}/share/{token}"
+        await query.answer("Switched to Root ✅")
+        await reply_text_safe(
+            query.message,
+            f"🏠 **Switched to Root Folder!**\n\n`{u['base_folder']}`",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🌐 Open Root Drive", url=share_url)],
+                [InlineKeyboardButton("📂 View Folders", callback_data="cb:myfolders")]
+            ]),
+            disable_preview=True
+        )
+        return
+
+    elif data == "cb:myfolders":
+        await query.answer()
+        msg_text, markup = await build_folders_view(u)
+        await reply_text_safe(query.message, msg_text, reply_markup=markup, disable_preview=True)
+        return
 
 @bot.on_message(
     filters.private & (
@@ -532,6 +933,7 @@ async def bot_media_receiver(client: Client, message: Message):
         )
         return
 
+    u = get_or_create_bot_user(message.from_user)
     status_msg = await reply_text_safe(message, "⚡ Processing file & generating stream link...")
 
     # Determine media object
@@ -571,31 +973,25 @@ async def bot_media_receiver(client: Client, message: Message):
 
     mime_type = getattr(media, "mime_type", None) or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
 
-    # Determine folder:
+    # Determine target folder:
     # 1. Check if caption has explicit folder (/movies or folder: /notes)
-    # 2. Check user's active folder session (set by typing /movies beforehand)
-    # 3. Default to "/Telegram"
-    user_id = message.from_user.id if message.from_user else 0
-    folder = None
+    # 2. Else use user's active folder
+    target_folder = None
     if message.caption:
         cap = message.caption.strip()
         if cap.startswith("/"):
-            folder = cap.split("\n")[0].strip()
+            target_folder = resolve_user_folder_path(u["base_folder"], cap.split("\n")[0].strip())
         elif cap.lower().startswith("folder:"):
-            folder = cap.split(":", 1)[1].strip().split("\n")[0].strip()
+            target_folder = resolve_user_folder_path(u["base_folder"], cap.split(":", 1)[1].strip().split("\n")[0].strip())
 
-    if not folder:
-        folder = user_active_folder.get(user_id, "/Telegram")
-
-    if not folder.startswith("/"):
-        folder = "/" + folder
-    folder = folder.rstrip("/") or "/"
+    if not target_folder:
+        target_folder = u["active_folder"]
 
     try:
         # Copy message directly to CHANNEL_ID (instant Telegram server-side clone, 0 byte VPS transfer!)
         chan_msg = await message.copy(
             chat_id=CHANNEL_ID,
-            caption=f"Folder: `{folder}` | File: `{file_name}`"
+            caption=f"Folder: `{target_folder}` | File: `{file_name}`"
         )
     except Exception as e:
         if status_msg:
@@ -604,16 +1000,16 @@ async def bot_media_receiver(client: Client, message: Message):
             await reply_text_safe(message, f"❌ Failed to store file in Telegram Channel: {e}")
         return
 
-    # Generate unique share token
+    # Generate unique share tokens
     share_token = secrets.token_urlsafe(12)
+    folder_token = get_folder_share_token(target_folder, u["user_id"])
 
     # Save in SQLite drive.db
     conn = sqlite3.connect("drive.db")
     c = conn.cursor()
-    c.execute("INSERT OR IGNORE INTO folders (path, share_token) VALUES (?, ?)", (folder, secrets.token_urlsafe(14)))
     c.execute(
-        "INSERT INTO files (message_id, name, size, mime_type, folder, share_token) VALUES (?, ?, ?, ?, ?, ?)",
-        (chan_msg.id, file_name, file_size, mime_type, folder, share_token)
+        "INSERT INTO files (message_id, name, size, mime_type, folder, share_token, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (chan_msg.id, file_name, file_size, mime_type, target_folder, share_token, u["user_id"])
     )
     conn.commit()
     conn.close()
@@ -623,18 +1019,21 @@ async def bot_media_receiver(client: Client, message: Message):
     web_stream_url = f"{BASE_URL}/f/{share_token}"
     direct_stream_url = f"{BASE_URL}/stream/{chan_msg.id}/{quoted_name}?token={share_token}"
     direct_download_url = f"{BASE_URL}/dl/{chan_msg.id}/{quoted_name}?token={share_token}"
+    folder_share_url = f"{BASE_URL}/share/{folder_token}"
 
+    rel_folder = get_relative_folder_name(target_folder, u["base_folder"])
     safe_file_name = file_name.replace("`", "'")
     size_str = format_size_human(file_size)
 
     response_text = (
-        "✅ **File Stored & Ready to Stream!** 🚀\n\n"
+        "✅ **File Stored in Your Cloud Folder!** 🚀\n\n"
         f"📁 **File Name:** `{safe_file_name}`\n"
         f"📦 **Size:** `{size_str}`\n"
-        f"📂 **Folder:** `{folder}`\n\n"
-        f"🎬 **Web Stream (Online Player):**\n`{web_stream_url}`\n\n"
+        f"📂 **Folder:** `{rel_folder}`\n\n"
+        f"🎬 **Web Stream (Online Video Player):**\n`{web_stream_url}`\n\n"
         f"⚡ **Direct Stream (VLC/Player):**\n`{direct_stream_url}`\n\n"
         f"📥 **Fast Download Link:**\n`{direct_download_url}`\n\n"
+        f"🌐 **Folder Share Link ({rel_folder}):**\n`{folder_share_url}`\n\n"
         "💡 *Folder change karne ke liye is message ko reply karke naya path likhein (jaise `/chemistry`).*"
     )
 
@@ -643,8 +1042,11 @@ async def bot_media_receiver(client: Client, message: Message):
             InlineKeyboardButton("🎬 Watch / Stream in Browser", url=web_stream_url)
         ],
         [
-            InlineKeyboardButton("📥 Fast Download", url=direct_download_url),
-            InlineKeyboardButton("🌐 Web Drive", url=BASE_URL)
+            InlineKeyboardButton(f"📂 Open Folder ({rel_folder})", url=folder_share_url),
+            InlineKeyboardButton("📥 Fast Download", url=direct_download_url)
+        ],
+        [
+            InlineKeyboardButton("📂 My Folders", callback_data="cb:myfolders")
         ]
     ])
 
