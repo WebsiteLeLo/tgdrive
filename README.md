@@ -64,6 +64,15 @@
   * **Public Folder Sharing**: Share any folder via a secure URL (`/share/{token}`). Guests can view, search, stream, and download files within that folder without an account or password.
   * **Instant File Sharing**: Generate direct public share links (`/f/{token}`) for individual files with integrated progressive preview.
   * **1-Click Token Revocation**: Invalidate old tokens and issue new ones instantly.
+* **🤖 Interactive Telegram Bot (Direct PM Streaming)**:
+  * **Upload via Telegram**: Send or forward any video, document, audio, or photo directly to your Telegram bot.
+  * **Zero-Bandwidth Instant Server Cloning**: The bot clones the media into your storage channel using MTProto server-side copy in `< 100ms` without downloading or re-uploading bytes to the VPS.
+  * **Instant Stream & Download Link Generation**: The bot immediately replies with:
+    * 🎬 **Web Player Preview Link** (`/f/{token}`) with embedded HTML5 video player, PDF reader, and media viewer.
+    * ⚡ **Direct Stream Link** (`/stream/{id}/{name}?token={token}`) for VLC, MX Player, IINA, Infuse, Kodi.
+    * 📥 **High-Speed Direct Download Link** (`/dl/{id}/{name}?token={token}`).
+  * **Caption-based Folder Sorting**: Add a folder path in the message caption (e.g. `/movies` or `/notes/physics`) to automatically organize files into folders in the Web Drive.
+  * **Access Control**: Restrict bot upload rights with `ALLOWED_TELEGRAM_USERS` in `.env` to authorized user IDs or usernames.
 * **💻 Git-like Terminal CLI (`tgdrive`)**:
   * Zero pip dependencies (pure Python 3 standard library).
   * Familiar Git commands: `init`, `add`, `status`, `push`, `pull`, `share`, `ls`.

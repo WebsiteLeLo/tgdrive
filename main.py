@@ -7,10 +7,12 @@ import sqlite3
 import tempfile
 import mimetypes
 import asyncio
+import urllib.parse
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Header, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
-from pyrogram import Client
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,6 +23,29 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin")
 PORT = int(os.getenv("PORT", "3005"))
+BASE_URL = os.getenv("BASE_URL", "https://drive.pwxstudy.site").rstrip("/")
+ALLOWED_TELEGRAM_USERS = os.getenv("ALLOWED_TELEGRAM_USERS", "").strip()
+allowed_user_list = [u.strip().lower() for u in ALLOWED_TELEGRAM_USERS.split(",") if u.strip()]
+
+def is_telegram_user_allowed(user) -> bool:
+    if not allowed_user_list:
+        return True
+    if not user:
+        return False
+    user_id = str(user.id)
+    username = (user.username or "").lower()
+    return user_id in allowed_user_list or username in allowed_user_list
+
+def format_size_human(size_bytes: int) -> str:
+    if not size_bytes or size_bytes <= 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    val = float(size_bytes)
+    while val >= 1024 and i < len(units) - 1:
+        val /= 1024
+        i += 1
+    return f"{val:.2f} {units[i]}"
 
 def init_db():
     conn = sqlite3.connect("drive.db")
@@ -290,13 +315,169 @@ async def cleanup_stale_chunks():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await bot.start()
-    print("Telegram MTProto Connected (Subfolder Edition)")
+    try:
+        me = await bot.get_me()
+        print(f"Telegram MTProto Connected as @{me.username} (ID: {me.id})")
+    except Exception:
+        print("Telegram MTProto Connected (Subfolder Edition)")
     cleanup_task = asyncio.create_task(cleanup_stale_chunks())
     yield
     cleanup_task.cancel()
     await bot.stop()
 
 app = FastAPI(lifespan=lifespan)
+
+# ========================================================
+# Telegram Bot Interactive PM Handlers
+# ========================================================
+
+@bot.on_message(filters.private & filters.command(["start", "help"]))
+async def bot_start_handler(client: Client, message: Message):
+    welcome_text = (
+        "👋 **Namaste! Welcome to TG-Cloud Drive Bot** 🚀\n\n"
+        "Mujhe koi bhi **video, movie, document, audio, ya file** forward ya direct send kijiye.\n\n"
+        "Mai aapko turant:\n"
+        "• 🎬 **Web Browser Streaming Link** (Online video player ke sath)\n"
+        "• ⚡ **Direct High-Speed Download Link** (Range & multi-thread enabled)\n"
+        "• 📂 TG-Drive me auto-save kar dunga!\n\n"
+        "💡 *Tip: File bhejte waqt caption me folder ka naam likh sakte hain, jaise `/movies` ya `/notes`.*\n\n"
+        f"🌐 **Web Drive UI:** {BASE_URL}"
+    )
+    await message.reply_text(
+        welcome_text,
+        disable_web_page_preview=True,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🌐 Open Web Drive", url=BASE_URL)]
+        ])
+    )
+
+@bot.on_message(filters.private & filters.command(["id", "myid"]))
+async def bot_id_handler(client: Client, message: Message):
+    await message.reply_text(
+        f"👤 **Your Telegram User ID:** `{message.from_user.id}`\n"
+        f"📛 **Username:** @{message.from_user.username or 'none'}"
+    )
+
+@bot.on_message(
+    filters.private & (
+        filters.document | filters.video | filters.audio |
+        filters.photo | filters.voice | filters.video_note
+    )
+)
+async def bot_media_receiver(client: Client, message: Message):
+    if not is_telegram_user_allowed(message.from_user):
+        await message.reply_text(
+            f"⛔ **Access Restricted**\n\n"
+            f"Aap is bot par files upload karne ke liye authorized nahi hain.\n"
+            f"Aapka Telegram ID: `{message.from_user.id}`\n\n"
+            f"Kripya admin ko bolkar `.env` me `ALLOWED_TELEGRAM_USERS` me apna ID add karwayein."
+        )
+        return
+
+    status_msg = await message.reply_text("⚡ Processing file & generating stream link...", quote=True)
+
+    # Determine media object
+    media = (
+        message.document or message.video or message.audio or
+        message.voice or message.video_note or
+        (message.photo[-1] if isinstance(message.photo, list) else message.photo)
+    )
+
+    # Extract file metadata
+    file_size = getattr(media, "file_size", 0)
+    file_name = getattr(media, "file_name", None)
+
+    if not file_name:
+        if message.video:
+            file_name = f"video_{message.id}.mp4"
+        elif message.audio:
+            file_name = f"audio_{message.id}.mp3"
+        elif message.voice:
+            file_name = f"voice_{message.id}.ogg"
+        elif message.video_note:
+            file_name = f"videonote_{message.id}.mp4"
+        elif message.photo:
+            file_name = f"photo_{message.id}.jpg"
+        else:
+            file_name = f"file_{message.id}.bin"
+
+    mime_type = getattr(media, "mime_type", None) or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+
+    # Determine folder from caption if specified (e.g. "/movies" or "folder: /notes")
+    folder = "/Telegram"
+    if message.caption:
+        cap = message.caption.strip()
+        if cap.startswith("/"):
+            folder = cap.split("\n")[0].strip()
+        elif cap.lower().startswith("folder:"):
+            folder = cap.split(":", 1)[1].strip().split("\n")[0].strip()
+
+    if not folder.startswith("/"):
+        folder = "/" + folder
+    folder = folder.rstrip("/") or "/"
+
+    try:
+        # Copy message directly to CHANNEL_ID (instant Telegram server-side clone, 0 byte VPS transfer!)
+        chan_msg = await message.copy(
+            chat_id=CHANNEL_ID,
+            caption=f"Folder: `{folder}` | File: `{file_name}`"
+        )
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Failed to store file in Telegram Channel: {e}")
+        return
+
+    # Generate unique share token
+    share_token = secrets.token_urlsafe(12)
+
+    # Save in SQLite drive.db
+    conn = sqlite3.connect("drive.db")
+    c = conn.cursor()
+    c.execute("INSERT OR IGNORE INTO folders (path, share_token) VALUES (?, ?)", (folder, secrets.token_urlsafe(14)))
+    c.execute(
+        "INSERT INTO files (message_id, name, size, mime_type, folder, share_token) VALUES (?, ?, ?, ?, ?, ?)",
+        (chan_msg.id, file_name, file_size, mime_type, folder, share_token)
+    )
+    conn.commit()
+    conn.close()
+
+    # Build links
+    quoted_name = urllib.parse.quote(file_name)
+    web_stream_url = f"{BASE_URL}/f/{share_token}"
+    direct_stream_url = f"{BASE_URL}/stream/{chan_msg.id}/{quoted_name}?token={share_token}"
+    direct_download_url = f"{BASE_URL}/dl/{chan_msg.id}/{quoted_name}?token={share_token}"
+
+    safe_file_name = file_name.replace("`", "'")
+    size_str = format_size_human(file_size)
+
+    response_text = (
+        "✅ **File Stored & Ready to Stream!** 🚀\n\n"
+        f"📁 **File Name:** `{safe_file_name}`\n"
+        f"📦 **Size:** `{size_str}`\n"
+        f"📂 **Folder:** `{folder}`\n\n"
+        f"🎬 **Web Stream (Online Player):**\n`{web_stream_url}`\n\n"
+        f"⚡ **Direct Stream (VLC/Player):**\n`{direct_stream_url}`\n\n"
+        f"📥 **Fast Download Link:**\n`{direct_download_url}`"
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎬 Watch / Stream in Browser", url=web_stream_url)
+        ],
+        [
+            InlineKeyboardButton("📥 Fast Download", url=direct_download_url),
+            InlineKeyboardButton("🌐 Web Drive", url=BASE_URL)
+        ]
+    ])
+
+    await status_msg.edit_text(response_text, reply_markup=keyboard, disable_web_page_preview=True)
+
+@bot.on_message(filters.private & filters.text & ~filters.command(["start", "help", "id", "myid"]))
+async def bot_text_fallback(client: Client, message: Message):
+    await message.reply_text(
+        "📁 **Send or forward any file, video, or document here!**\n\n"
+        "Mai aapko turant online browser me play karne aur high-speed download karne ka direct link de dunga.\n\n"
+        "💡 *Tip: File ke sath caption me `/movies` ya `/notes` likhenge toh wo us specific folder me save hogi.*"
+    )
 
 def verify_auth(password: str):
     if password != ADMIN_PASS:
@@ -738,8 +919,14 @@ async def batch_delete_files(request: Request, x_auth: str = Header("")):
     conn.close()
     return {"status": "ok", "deleted": deleted}
 
-@app.api_route("/stream/{message_id}", methods=["GET", "HEAD"])
-async def stream_file(message_id: int, request: Request, token: str = "", key: str = "", dl: int = 0):
+@app.api_route("/dl/{message_id}", methods=["GET", "HEAD"], operation_id="dl_file_by_id")
+@app.api_route("/dl/{message_id}/{filename:path}", methods=["GET", "HEAD"], operation_id="dl_file_by_id_name")
+async def dl_file(message_id: int, request: Request, filename: str = "", token: str = "", key: str = ""):
+    return await stream_file(message_id=message_id, request=request, filename=filename, token=token, key=key, dl=1)
+
+@app.api_route("/stream/{message_id}", methods=["GET", "HEAD"], operation_id="stream_file_by_id")
+@app.api_route("/stream/{message_id}/{filename:path}", methods=["GET", "HEAD"], operation_id="stream_file_by_id_name")
+async def stream_file(message_id: int, request: Request, filename: str = "", token: str = "", key: str = "", dl: int = 0):
     if key != ADMIN_PASS:
         conn = sqlite3.connect("drive.db")
         c = conn.cursor()
@@ -755,7 +942,7 @@ async def stream_file(message_id: int, request: Request, token: str = "", key: s
 
     media = getattr(msg, msg.media.value)
     file_size = media.file_size
-    file_name = getattr(media, "file_name", f"file_{message_id}")
+    file_name = filename or getattr(media, "file_name", f"file_{message_id}")
     mime_type = getattr(media, "mime_type", "application/octet-stream")
 
     range_header = request.headers.get("Range", "").strip()
