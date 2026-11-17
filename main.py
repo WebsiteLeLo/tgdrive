@@ -348,13 +348,14 @@ async def media_queue_worker():
         try:
             job = await media_processing_queue.get()
             try:
-                await process_media_job(job)
+                if job.get("mode") == "batch":
+                    await process_batch_job(job)
+                else:
+                    await process_single_job(job)
             except Exception as e:
                 print(f"[media_queue_worker job error] {e}")
             finally:
                 media_processing_queue.task_done()
-                # 1.2s delay between successful copies avoids Telegram flood limit on the channel
-                await asyncio.sleep(1.2)
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -1152,6 +1153,58 @@ async def bot_callback_router(client: Client, query: CallbackQuery):
         )
         return
 
+def generate_progress_bar(percent: int, length: int = 10) -> str:
+    filled = int(round(length * percent / 100))
+    filled = max(0, min(length, filled))
+    return "█" * filled + "░" * (length - filled)
+
+BATCH_DEBOUNCE_DELAY = 2.0
+
+class UserBatchCollector:
+    def __init__(self, user_id: int, user: dict, target_folder: str):
+        self.user_id = user_id
+        self.user = user
+        self.target_folder = target_folder
+        self.items = []
+        self.timer_handle = None
+        self.status_msg = None
+        self.is_notified = False
+
+active_user_batches: dict[int, UserBatchCollector] = {}
+
+async def finalize_user_batch(user_id: int):
+    collector = active_user_batches.pop(user_id, None)
+    if not collector or not collector.items:
+        return
+    if collector.timer_handle:
+        try:
+            collector.timer_handle.cancel()
+        except Exception:
+            pass
+        collector.timer_handle = None
+
+    if len(collector.items) == 1:
+        item = collector.items[0]
+        await media_processing_queue.put({
+            "mode": "single",
+            "message": item["message"],
+            "user": collector.user,
+            "target_folder": item["target_folder"],
+            "file_name": item["file_name"],
+            "file_size": item["file_size"],
+            "mime_type": item["mime_type"],
+            "status_msg": collector.status_msg
+        })
+    else:
+        await media_processing_queue.put({
+            "mode": "batch",
+            "user": collector.user,
+            "target_folder": collector.target_folder,
+            "items": collector.items,
+            "status_msg": collector.status_msg,
+            "first_message": collector.items[0]["message"]
+        })
+
 @bot.on_message(
     filters.private & (
         filters.document | filters.video | filters.audio |
@@ -1170,7 +1223,7 @@ async def bot_media_receiver(client: Client, message: Message):
         return
 
     u = get_or_create_bot_user(message.from_user)
-    status_msg = await reply_text_safe(message, "⚡ Processing file & generating stream link...")
+    user_id = message.from_user.id
 
     # Determine media object
     media = (
@@ -1210,8 +1263,6 @@ async def bot_media_receiver(client: Client, message: Message):
     mime_type = getattr(media, "mime_type", None) or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
 
     # Determine target folder:
-    # 1. Check if caption has explicit folder (/movies or folder: /notes)
-    # 2. Else use user's active folder
     target_folder = None
     if message.caption:
         cap = message.caption.strip()
@@ -1223,29 +1274,61 @@ async def bot_media_receiver(client: Client, message: Message):
     if not target_folder:
         target_folder = u["active_folder"]
 
-    q_len = media_processing_queue.qsize()
-    queue_msg = f"⚡ Queued for storage (Position #{q_len + 1})..." if q_len > 0 else "⚡ Processing file & generating stream link..."
-    status_msg = await reply_text_safe(message, queue_msg)
+    # Add to user batch collector
+    if user_id not in active_user_batches:
+        collector = UserBatchCollector(user_id=user_id, user=u, target_folder=target_folder)
+        active_user_batches[user_id] = collector
+    else:
+        collector = active_user_batches[user_id]
+        if target_folder:
+            collector.target_folder = target_folder
 
-    # Enqueue for safe, rate-paced background processing
-    await media_processing_queue.put({
+    collector.items.append({
         "message": message,
-        "status_msg": status_msg,
-        "user": u,
-        "target_folder": target_folder,
         "file_name": file_name,
         "file_size": file_size,
-        "mime_type": mime_type
+        "mime_type": mime_type,
+        "target_folder": target_folder
     })
 
-async def process_media_job(job: dict):
+    # If 2 or more files detected and not yet notified, send exactly ONE notification message
+    if len(collector.items) == 2 and not collector.is_notified:
+        collector.is_notified = True
+        rel_folder = get_relative_folder_name(collector.target_folder, u["base_folder"])
+        collector.status_msg = await reply_text_safe(
+            collector.items[0]["message"],
+            f"📦 **Bulk Forwarding Detected!**\n\n"
+            f"📂 Target Folder: `{rel_folder}`\n"
+            f"⏳ Gathering all files... Ek sath progress card me update hoga (zero chat spam)!"
+        )
+
+    # Cancel previous timer and debounce
+    if collector.timer_handle:
+        try:
+            collector.timer_handle.cancel()
+        except Exception:
+            pass
+
+    loop = asyncio.get_running_loop()
+    if len(collector.items) >= 100:
+        asyncio.create_task(finalize_user_batch(user_id))
+    else:
+        collector.timer_handle = loop.call_later(
+            BATCH_DEBOUNCE_DELAY,
+            lambda uid=user_id: asyncio.create_task(finalize_user_batch(uid))
+        )
+
+async def process_single_job(job: dict):
     message = job["message"]
-    status_msg = job["status_msg"]
+    status_msg = job.get("status_msg")
     u = job["user"]
     target_folder = job["target_folder"]
     file_name = job["file_name"]
     file_size = job["file_size"]
     mime_type = job["mime_type"]
+
+    if not status_msg:
+        status_msg = await reply_text_safe(message, "⚡ Processing file & generating stream link...")
 
     chan_msg = None
     for attempt in range(6):
@@ -1261,7 +1344,7 @@ async def process_media_job(job: dict):
             if status_msg:
                 await edit_text_safe(
                     status_msg,
-                    f"⏳ **Telegram rate limit active.**\n\nAuto-waiting `{wait_time}s` before saving `{file_name}`...\n*(Bache huye files queue me safe hain, thoda intezar karein!)*"
+                    f"⏳ **Telegram rate limit active.**\n\nAuto-waiting `{wait_time}s` before saving `{file_name}`..."
                 )
             await asyncio.sleep(wait_time + 1)
         except Exception as e:
@@ -1308,7 +1391,7 @@ async def process_media_job(job: dict):
         f"⚡ **Direct Stream (VLC/Player):**\n`{direct_stream_url}`\n\n"
         f"📥 **Fast Download Link:**\n`{direct_download_url}`\n\n"
         f"🌐 **Folder Share Link ({rel_folder}):**\n`{folder_share_url}`\n\n"
-        "💡 *Folder change karne ke liye is message ko reply karke naya path likhein (jaise `/chemistry`).*"
+        "💡 *Folder change karne ke liye /folders use karein ya naya folder banane ke liye `/newfolder <naam>` likhein.*"
     )
 
     keyboard = InlineKeyboardMarkup([
@@ -1328,6 +1411,126 @@ async def process_media_job(job: dict):
         await edit_text_safe(status_msg, response_text, reply_markup=keyboard, disable_preview=True)
     else:
         await reply_text_safe(message, response_text, reply_markup=keyboard, disable_preview=True)
+
+    await asyncio.sleep(1.2)
+
+async def process_batch_job(job: dict):
+    u = job["user"]
+    target_folder = job["target_folder"]
+    items = job["items"]
+    status_msg = job.get("status_msg")
+    first_message = job["first_message"]
+    total = len(items)
+
+    rel_folder = get_relative_folder_name(target_folder, u["base_folder"])
+
+    if not status_msg:
+        status_msg = await reply_text_safe(
+            first_message,
+            f"📦 **Starting Batch Upload ({total} Files)...**\n📂 Target Folder: `{rel_folder}`"
+        )
+
+    processed_files = []
+    failed_files = 0
+    last_edit_time = 0.0
+
+    for idx, item in enumerate(items, 1):
+        file_name = item["file_name"]
+        file_size = item["file_size"]
+        mime_type = item["mime_type"]
+        item_folder = item.get("target_folder") or target_folder
+        msg = item["message"]
+
+        chan_msg = None
+        for attempt in range(6):
+            try:
+                chan_msg = await msg.copy(
+                    chat_id=CHANNEL_ID,
+                    caption=f"Folder: `{item_folder}` | File: `{file_name}`"
+                )
+                break
+            except FloodWait as e:
+                wait_time = int(getattr(e, 'value', 5) or 5)
+                print(f"[FloodWait] Telegram asked to wait {wait_time}s on '{file_name}'")
+                if status_msg:
+                    await edit_text_safe(
+                        status_msg,
+                        f"⏳ **Telegram rate limit active.**\nAuto-waiting `{wait_time}s`... ({len(processed_files)}/{total} files saved)"
+                    )
+                await asyncio.sleep(wait_time + 1)
+            except Exception as e:
+                print(f"[process_batch_job copy error] {file_name}: {e}")
+                break
+
+        if chan_msg:
+            share_token = secrets.token_urlsafe(12)
+            try:
+                conn = sqlite3.connect("drive.db")
+                c = conn.cursor()
+                c.execute(
+                    "INSERT INTO files (message_id, name, size, mime_type, folder, share_token, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (chan_msg.id, file_name, file_size, mime_type, item_folder, share_token, u["user_id"])
+                )
+                conn.commit()
+                conn.close()
+                processed_files.append({"name": file_name, "size": file_size, "token": share_token})
+            except Exception as e:
+                print(f"[process_batch_job db error] {e}")
+                failed_files += 1
+        else:
+            failed_files += 1
+
+        # Throttle progress edits: update every 3 seconds or on first/last item
+        now = time.time()
+        if (now - last_edit_time > 3.0) or (idx == 1) or (idx == total):
+            percent = int((idx / total) * 100)
+            bar = generate_progress_bar(percent)
+            safe_name = file_name[:35].replace("`", "'")
+            status_text = (
+                f"📦 **Bulk Uploading to Cloud Drive...** ⚡\n\n"
+                f"📂 **Folder:** `{rel_folder}`\n"
+                f"📊 **Progress:** `[{bar}]` `{percent}%`\n"
+                f"📁 **Processed:** `{idx}/{total}` files\n"
+                f"📄 **Current:** `{safe_name}`\n\n"
+                f"🛡️ *Flood protection active (Single live status message).* "
+            )
+            if status_msg:
+                await edit_text_safe(status_msg, status_text)
+            last_edit_time = now
+
+        # Pacing between copies avoids triggering Telegram channel flood limit
+        await asyncio.sleep(1.2)
+
+    # All files in batch processed! Build final summary card
+    folder_token = get_folder_share_token(target_folder, u["user_id"])
+    folder_share_url = f"{BASE_URL}/share/{folder_token}"
+    total_size = sum(f["size"] for f in processed_files)
+    total_size_str = format_size_human(total_size)
+
+    final_card = (
+        "🎉 **Bulk Upload Complete!** 🚀\n\n"
+        f"📂 **Folder:** `{rel_folder}`\n"
+        f"✅ **Files Saved:** `{len(processed_files)} / {total}`\n"
+        f"💾 **Total Size:** `{total_size_str}`\n\n"
+        f"🌐 **Open Folder in Web Drive:**\n`{folder_share_url}`\n\n"
+        f"💡 *Saare {len(processed_files)} files aapke `{rel_folder}` folder me organize ho chuke hain.*"
+    )
+    if failed_files > 0:
+        final_card += f"\n⚠️ *{failed_files} file(s) could not be saved.*"
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(f"📂 Open Folder ({rel_folder})", url=folder_share_url)
+        ],
+        [
+            InlineKeyboardButton("📂 My Folders", callback_data="cb:myfolders")
+        ]
+    ])
+
+    if status_msg:
+        await edit_text_safe(status_msg, final_card, reply_markup=keyboard, disable_preview=True)
+    else:
+        await reply_text_safe(first_message, final_card, reply_markup=keyboard, disable_preview=True)
 
 def verify_auth(password: str):
     if password != ADMIN_PASS:
