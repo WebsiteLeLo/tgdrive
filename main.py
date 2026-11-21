@@ -12,8 +12,8 @@ import html
 from typing import Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Header, Response
-from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, LinkPreviewOptions, CallbackQuery
 from pyrogram.errors import FloodWait
@@ -381,6 +381,13 @@ async def lifespan(app: FastAPI):
     await bot.stop()
 
 app = FastAPI(lifespan=lifespan)
+
+# Mount Vite React frontend static assets if available
+DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+if os.path.exists(DIST_DIR):
+    assets_dir = os.path.join(DIST_DIR, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
 # ========================================================
 # Video / Image Thumbnail Generation & Cache
@@ -3342,10 +3349,14 @@ HTML_UI = """
 </html>
 """
 
+DIST_INDEX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist", "index.html")
 TEMPLATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_ui():
+    if os.path.exists(DIST_INDEX):
+        with open(DIST_INDEX, "r", encoding="utf-8") as f:
+            return f.read()
     if os.path.exists(TEMPLATE_PATH):
         with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
             return f.read()
@@ -3374,16 +3385,15 @@ async def get_public_file_info(token: str):
     file_data["siblings"] = siblings
     return file_data
 
-@app.get("/share/{token}", response_class=HTMLResponse)
+@app.api_route("/share/{token}", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_share_page(token: str):
     return await serve_ui()
 
-@app.get("/f/{token}", response_class=HTMLResponse)
-@app.get("/file/{token}", response_class=HTMLResponse)
-@app.get("/watch/{token}", response_class=HTMLResponse)
-@app.get("/v/{token}", response_class=HTMLResponse)
+@app.api_route("/f/{token}", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@app.api_route("/file/{token}", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@app.api_route("/watch/{token}", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@app.api_route("/v/{token}", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_file_share_page(token: str):
-    return await serve_ui()
     conn = sqlite3.connect("drive.db")
     c = conn.cursor()
     c.execute("SELECT name, mime_type FROM files WHERE share_token = ?", (token,))
