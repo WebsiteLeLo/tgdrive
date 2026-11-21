@@ -5,7 +5,13 @@ import { formatBytes, getFileExtension } from '../utils';
 export default function NoteCard({ file }) {
   const watchUrl = `/watch/${encodeURIComponent(file.share_token)}`;
   const ext = (getFileExtension(file.name) || 'PDF').toUpperCase();
-  const chapterName = file.folder.split('/').filter(Boolean).pop() || 'Notes';
+  
+  const parts = (file.folder || '').split('/').filter(Boolean);
+  const chapterName = parts.pop() || 'Notes';
+  const subjectName = parts.pop();
+  const badgeText = subjectName && !subjectName.startsWith('@') && !subjectName.includes('_')
+    ? `${subjectName} • ${chapterName}`
+    : chapterName;
 
   return (
     <a 
@@ -28,8 +34,11 @@ export default function NoteCard({ file }) {
           {file.name}
         </h4>
         <div className="flex items-center gap-2 text-xs text-slate-400 flex-wrap">
-          <span className="bg-white/5 border border-white/[0.06] px-2 py-0.5 rounded text-[11px] text-slate-300 truncate max-w-[150px]">
-            {chapterName}
+          <span 
+            title={badgeText}
+            className="bg-white/5 border border-white/[0.06] px-2 py-0.5 rounded text-[11px] text-slate-300 truncate max-w-[200px]"
+          >
+            {badgeText}
           </span>
           <span>•</span>
           <span className="font-mono text-[11px]">{formatBytes(file.size)}</span>

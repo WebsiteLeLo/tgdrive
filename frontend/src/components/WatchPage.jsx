@@ -61,7 +61,13 @@ export default function WatchPage({ token }) {
   const streamUrl = `/stream/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
   const thumbUrl = `/thumb/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
   const backUrl = file.folder_token ? `/share/${file.folder_token}` : '/';
-  const chapterName = file.folder.split('/').filter(Boolean).pop() || 'General';
+  
+  const parts = (file.folder || '').split('/').filter(Boolean);
+  const chapterName = parts.pop() || 'General';
+  const subjectName = parts.pop();
+  const displayChapter = subjectName && !subjectName.startsWith('@') && !subjectName.includes('_')
+    ? `${subjectName} • ${chapterName}`
+    : chapterName;
 
   // Sibling video lectures for playlist
   const videoSiblings = (file.siblings || []).filter(s => getFileTypeInfo(s.mime_type, s.name).isVideo);
@@ -152,7 +158,7 @@ export default function WatchPage({ token }) {
               
               <div className="flex items-center gap-3 flex-wrap text-xs text-slate-400 pt-2 border-t border-white/[0.06]">
                 <span className="bg-sky-500/10 border border-sky-500/20 text-sky-400 px-2.5 py-1 rounded-md font-medium">
-                  {chapterName}
+                  {displayChapter}
                 </span>
                 <span>•</span>
                 <span className="font-mono">{formatBytes(file.size)}</span>
