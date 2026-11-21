@@ -12,6 +12,7 @@ import html
 from typing import Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Header, Response
+from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse
 from fastapi.responses import HTMLResponse, StreamingResponse, RedirectResponse, FileResponse
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, LinkPreviewOptions, CallbackQuery
@@ -641,7 +642,8 @@ def parse_folder_command(text: str) -> str | None:
             "/start", "/help", "/id", "/myid", "/folders", "/myfolders", "/list",
             "/newfolder", "/mkdir", "/create", "/share", "/sharefolder",
             "/root", "/home", "/resetfolder", "/files", "/status",
-            "/delfolder", "/deletefolder", "/rmdir"
+            "/delfolder", "/deletefolder", "/rmdir",
+            "/clone", "/clonechannel", "/stopclone", "/cancelclone"
         ):
             return None
         f = cmd.rstrip("/")
@@ -748,10 +750,466 @@ async def build_folders_view(u: dict):
 
     return "\n".join(msg_lines), InlineKeyboardMarkup(buttons[:10])
 
+def generate_progress_bar(percent: int, length: int = 10) -> str:
+    filled = int(round(length * percent / 100))
+    filled = max(0, min(length, filled))
+    return "█" * filled + "░" * (length - filled)
+
+# ========================================================
+# Telegram Channel Cloning Engine
+# ========================================================
+
+def parse_link_or_chat(token: str):
+    token = token.strip()
+    m_priv = re.match(r'https?://t\.me/c/(\d+)(?:/(\d+))?', token)
+    if m_priv:
+        chat_id = int('-100' + m_priv.group(1))
+        msg_id = int(m_priv.group(2)) if m_priv.group(2) else None
+        return chat_id, msg_id
+
+    m_pub = re.match(r'https?://t\.me/([a-zA-Z0-9_]+)(?:/(\d+))?', token)
+    if m_pub and m_pub.group(1).lower() not in ('c', 'joinchat'):
+        chat_id = m_pub.group(1)
+        msg_id = int(m_pub.group(2)) if m_pub.group(2) else None
+        return chat_id, msg_id
+
+    if token.startswith('@'):
+        return token[1:], None
+
+    if re.match(r'^-?\d+$', token):
+        return int(token), None
+
+    return None, None
+
+def parse_clone_args(text: str, reply_msg: Optional[Message] = None):
+    tokens = [t.strip() for t in text.split()[1:] if t.strip()]
+    source_chat = None
+    start_id = 1
+    end_id = None
+    target_val = None
+
+    if reply_msg and getattr(reply_msg, 'forward_from_chat', None):
+        source_chat = reply_msg.forward_from_chat.id or reply_msg.forward_from_chat.username
+        start_id = reply_msg.forward_from_message_id or 1
+        if tokens:
+            target_val = tokens[0]
+            if len(tokens) > 1 and tokens[1].isdigit():
+                end_id = start_id + int(tokens[1]) - 1
+        return source_chat, target_val, start_id, end_id
+
+    if not tokens:
+        return None, None, None, None
+
+    # Token 0 is source
+    s_chat, s_id = parse_link_or_chat(tokens[0])
+    if s_chat:
+        source_chat = s_chat
+        if s_id:
+            start_id = s_id
+
+    if not source_chat:
+        return None, None, None, None
+
+    idx = 1
+    # Check if Token 1 is second link (for range)
+    if idx < len(tokens):
+        c2, id2 = parse_link_or_chat(tokens[idx])
+        if c2 == source_chat and id2:
+            end_id = id2
+            idx += 1
+        elif id2 and not c2:
+            end_id = id2
+            idx += 1
+
+    # Next token is target
+    if idx < len(tokens):
+        target_val = tokens[idx]
+        idx += 1
+
+    # Optional start/end numbers
+    if idx < len(tokens) and tokens[idx].isdigit():
+        num = int(tokens[idx])
+        idx += 1
+        if idx < len(tokens) and tokens[idx].isdigit():
+            start_id = num
+            end_id = int(tokens[idx])
+        else:
+            end_id = num
+
+    return source_chat, target_val, start_id, end_id
+
+class CloneSession:
+    def __init__(self, user_id: int, source_chat, target_mode: str, target_val, start_id: int, end_id: Optional[int]):
+        self.user_id = user_id
+        self.source_chat = source_chat
+        self.target_mode = target_mode
+        self.target_val = target_val
+        self.start_id = start_id
+        self.end_id = end_id
+        self.is_running = True
+        self.total_processed = 0
+        self.copied_count = 0
+        self.skipped_count = 0
+        self.failed_count = 0
+        self.status_msg: Optional[Message] = None
+        self.task: Optional[asyncio.Task] = None
+
+active_clones: dict[int, CloneSession] = {}
+
+async def execute_channel_clone(session: CloneSession, user: dict):
+    user_id = session.user_id
+    source_chat = session.source_chat
+    target_mode = session.target_mode
+    target_val = session.target_val
+    start_id = session.start_id
+    end_id = session.end_id
+    status_msg = session.status_msg
+
+    stop_markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏹️ Stop Cloning", callback_data="cb:stopclone")]
+    ])
+
+    try:
+        source_chat_obj = await bot.get_chat(source_chat)
+        source_title = source_chat_obj.title or str(source_chat)
+    except Exception as e:
+        await edit_text_safe(
+            status_msg,
+            f"❌ **Source Channel Error**\n\n"
+            f"Channel `{source_chat}` ko access nahi kar paaye: `{e}`\n\n"
+            "💡 *Agar private channel hai toh pehle bot ko us channel me Administrator banayein.*"
+        )
+        active_clones.pop(user_id, None)
+        return
+
+    dest_title = ""
+    rel_folder = ""
+    target_folder = ""
+
+    if target_mode == "channel":
+        try:
+            target_chat_obj = await bot.get_chat(target_val)
+            dest_title = target_chat_obj.title or str(target_val)
+        except Exception as e:
+            await edit_text_safe(
+                status_msg,
+                f"❌ **Destination Channel Error**\n\n"
+                f"Target channel `{target_val}` ko access nahi kar paaye: `{e}`\n\n"
+                "💡 *Bot ko target channel me Administrator banakar 'Post Messages' permission dein.*"
+            )
+            active_clones.pop(user_id, None)
+            return
+    else:
+        # Drive mode
+        target_folder = resolve_user_folder_path(user["base_folder"], str(target_val))
+        rel_folder = get_relative_folder_name(target_folder, user["base_folder"])
+        dest_title = f"Web Drive ({rel_folder})"
+
+    curr_id = start_id
+    batch_size = 50
+    consecutive_empty_batches = 0
+    max_empty_batches = 3
+    last_edit_time = time.time()
+    total_to_scan = (end_id - start_id + 1) if end_id else None
+
+    while session.is_running:
+        if end_id and curr_id > end_id:
+            break
+
+        this_batch_end = min(curr_id + batch_size - 1, end_id) if end_id else (curr_id + batch_size - 1)
+        batch_ids = list(range(curr_id, this_batch_end + 1))
+        if not batch_ids:
+            break
+
+        try:
+            messages = await bot.get_messages(source_chat, batch_ids)
+        except FloodWait as e:
+            wait_s = int(getattr(e, 'value', 5) or 5)
+            if status_msg:
+                await edit_text_safe(status_msg, f"⏳ **Telegram rate limit active.** Auto-waiting `{wait_s}s`...", reply_markup=stop_markup)
+            await asyncio.sleep(wait_s + 1)
+            continue
+        except Exception as e:
+            print(f"[Clone get_messages error] {e}")
+            break
+
+        valid_msgs = [m for m in messages if m and not m.empty and not getattr(m, 'service', False)]
+        if not valid_msgs:
+            consecutive_empty_batches += 1
+            if not end_id and consecutive_empty_batches >= max_empty_batches:
+                break
+        else:
+            consecutive_empty_batches = 0
+
+        for m in messages:
+            if not session.is_running:
+                break
+            session.total_processed += 1
+
+            if not m or m.empty or getattr(m, 'service', False):
+                session.skipped_count += 1
+                continue
+
+            current_file_name = None
+
+            if target_mode == "channel":
+                chan_msg = None
+                for attempt in range(5):
+                    if not session.is_running:
+                        break
+                    try:
+                        chan_msg = await m.copy(chat_id=target_val)
+                        session.copied_count += 1
+                        break
+                    except FloodWait as e:
+                        wait_s = int(getattr(e, 'value', 5) or 5)
+                        if status_msg:
+                            await edit_text_safe(status_msg, f"⏳ Rate limit: waiting `{wait_s}s`... (Copied: {session.copied_count})", reply_markup=stop_markup)
+                        await asyncio.sleep(wait_s + 1)
+                    except Exception as e:
+                        print(f"[Clone copy to channel error] {e}")
+                        session.failed_count += 1
+                        break
+                await asyncio.sleep(1.2)
+
+            else:
+                media = (
+                    m.document or m.video or m.audio or
+                    m.voice or m.video_note or
+                    (m.photo[-1] if isinstance(m.photo, list) else m.photo)
+                )
+                if not media:
+                    session.skipped_count += 1
+                    continue
+
+                file_size = getattr(media, "file_size", 0)
+                file_name = getattr(media, "file_name", None)
+
+                if not file_name:
+                    if m.video:
+                        file_name = f"video_{m.id}.mp4"
+                    elif m.audio:
+                        file_name = f"audio_{m.id}.mp3"
+                    elif m.voice:
+                        file_name = f"voice_{m.id}.ogg"
+                    elif m.video_note:
+                        file_name = f"videonote_{m.id}.mp4"
+                    elif m.photo:
+                        file_name = f"photo_{m.id}.jpg"
+                    else:
+                        file_name = f"file_{m.id}.bin"
+
+                if m.caption:
+                    t_match = re.search(r'(?:Title|Name)\s*:\s*([^\r\n]+)', m.caption, re.IGNORECASE)
+                    if t_match:
+                        extracted_name = re.sub(r'[*_`]', '', t_match.group(1)).strip()
+                        if extracted_name and len(extracted_name) > 3:
+                            if "." not in extracted_name and "." in (file_name or ""):
+                                extracted_name += os.path.splitext(file_name)[1]
+                            file_name = extracted_name
+
+                current_file_name = file_name
+                mime_type = getattr(media, "mime_type", None) or mimetypes.guess_type(file_name)[0] or "application/octet-stream"
+
+                chan_msg = None
+                for attempt in range(5):
+                    if not session.is_running:
+                        break
+                    try:
+                        chan_msg = await m.copy(
+                            chat_id=CHANNEL_ID,
+                            caption=f"Folder: `{target_folder}` | File: `{file_name}`"
+                        )
+                        break
+                    except FloodWait as e:
+                        wait_s = int(getattr(e, 'value', 5) or 5)
+                        if status_msg:
+                            await edit_text_safe(status_msg, f"⏳ Rate limit: waiting `{wait_s}s`... (Saved: {session.copied_count})", reply_markup=stop_markup)
+                        await asyncio.sleep(wait_s + 1)
+                    except Exception as e:
+                        print(f"[Clone copy to storage error] {e}")
+                        break
+
+                if chan_msg:
+                    share_token = secrets.token_urlsafe(12)
+                    try:
+                        conn = sqlite3.connect("drive.db")
+                        c = conn.cursor()
+                        c.execute(
+                            "INSERT INTO files (message_id, name, size, mime_type, folder, share_token, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (chan_msg.id, file_name, file_size, mime_type, target_folder, share_token, user["user_id"])
+                        )
+                        conn.commit()
+                        conn.close()
+                        session.copied_count += 1
+                        if mime_type.startswith("video/") or mime_type.startswith("image/"):
+                            asyncio.create_task(get_or_create_thumbnail(chan_msg.id))
+                    except Exception as e:
+                        print(f"[Clone db error] {e}")
+                        session.failed_count += 1
+                else:
+                    session.failed_count += 1
+
+                await asyncio.sleep(1.2)
+
+            now = time.time()
+            if now - last_edit_time > 3.5:
+                progress_str = ""
+                if total_to_scan:
+                    pct = min(100, int((session.total_processed / total_to_scan) * 100))
+                    bar = generate_progress_bar(pct)
+                    progress_str = f"📊 **Progress:** `[{bar}]` `{pct}%` ({session.total_processed}/{total_to_scan})\n"
+                else:
+                    progress_str = f"📊 **Scanned:** `{session.total_processed}` messages\n"
+
+                file_display = f"\n📄 **Current:** `{current_file_name[:35].replace('`', '')}`" if current_file_name else ""
+                stat_text = (
+                    "⚡ **Channel Cloning in Progress...**\n\n"
+                    f"📡 **Source:** `{source_title}`\n"
+                    f"🎯 **Target:** `{dest_title}`\n"
+                    f"{progress_str}"
+                    f"✅ **Copied:** `{session.copied_count}`\n"
+                    f"⏭️ **Skipped:** `{session.skipped_count}`\n"
+                    f"📍 **Message ID:** `#{m.id}`"
+                    f"{file_display}\n\n"
+                    "🛡️ *Background rate-pacing & FloodWait auto-recovery active.*"
+                )
+                if status_msg:
+                    await edit_text_safe(status_msg, stat_text, reply_markup=stop_markup)
+                last_edit_time = now
+
+        curr_id = this_batch_end + 1
+
+    is_cancelled = not session.is_running
+    active_clones.pop(user_id, None)
+
+    final_header = "⏹️ **Channel Clone Stopped by User**" if is_cancelled else "🎉 **Channel Clone Completed!** 🚀"
+    final_card = (
+        f"{final_header}\n\n"
+        f"📡 **Source:** `{source_title}`\n"
+        f"🎯 **Target:** `{dest_title}`\n"
+        f"✅ **Total Copied:** `{session.copied_count}` items\n"
+        f"⏭️ **Skipped:** `{session.skipped_count}`\n"
+    )
+    if session.failed_count > 0:
+        final_card += f"⚠️ **Failed:** `{session.failed_count}` items\n"
+
+    final_buttons = []
+    if target_mode == "drive":
+        folder_token = get_folder_share_token(target_folder, user["user_id"])
+        folder_share_url = f"{BASE_URL}/share/{folder_token}"
+        final_card += f"\n🌐 **Web Drive Folder Link:**\n`{folder_share_url}`"
+        final_buttons.append([InlineKeyboardButton(f"📂 Open Folder ({rel_folder})", url=folder_share_url)])
+        final_buttons.append([InlineKeyboardButton("📂 My Folders", callback_data="cb:myfolders")])
+    else:
+        final_buttons.append([InlineKeyboardButton("📂 My Folders", callback_data="cb:myfolders")])
+
+    final_markup = InlineKeyboardMarkup(final_buttons)
+    if status_msg:
+        await edit_text_safe(status_msg, final_card, reply_markup=final_markup, disable_preview=True)
+    else:
+        await reply_text_safe(status_msg, final_card, reply_markup=final_markup, disable_preview=True)
+
 @bot.on_message(filters.private & filters.text)
 async def bot_text_router(client: Client, message: Message):
     text = (message.text or "").strip()
     u = get_or_create_bot_user(message.from_user)
+
+    # Secret Channel Cloning commands (/clone, /clonechannel, /stopclone, /cancelclone)
+    if text.lower() in ("/stopclone", "/cancelclone"):
+        if not is_telegram_user_allowed(message.from_user):
+            await reply_text_safe(message, "⛔ Access Restricted.")
+            return
+        sess = active_clones.get(message.from_user.id)
+        if not sess or not sess.is_running:
+            await reply_text_safe(message, "ℹ️ Koi active channel clone task running nahi hai.")
+            return
+        sess.is_running = False
+        await reply_text_safe(message, "⏹️ **Stopping Clone Task...** Current batch complete hote hi ruk jayega.")
+        return
+
+    if text.lower().startswith(("/clone", "/clonechannel")):
+        if not is_telegram_user_allowed(message.from_user):
+            await reply_text_safe(
+                message,
+                "⛔ **Access Restricted**\n\n"
+                "Ye ek secret admin command hai. Aap is command ko use karne ke liye authorized nahi hain."
+            )
+            return
+
+        source_chat, target_val, start_id, end_id = parse_clone_args(text, message.reply_to_message)
+        if not source_chat:
+            secret_help = (
+                "🔐 **Secret Telegram Channel Cloner** ⚡\n\n"
+                "Aap kisi bhi Telegram channel ke sabhi files ya messages ko Web Drive ya kisi aur channel me clone kar sakte hain!\n\n"
+                "📌 **Usage Formats:**\n\n"
+                "1️⃣ **Clone to Web Drive Folder:**\n"
+                "• `/clone @source_channel /Physics`\n"
+                "• `/clone @source_channel /Physics 1 100` *(Start to End ID)*\n"
+                "• `/clone -100123456789 /Notes` *(Private Channel ID)*\n\n"
+                "2️⃣ **Clone to Another Telegram Channel:**\n"
+                "• `/clone @source_channel @target_channel`\n"
+                "• `/clone @source_channel -100987654321 1 500`\n\n"
+                "3️⃣ **Clone via Telegram Message Links:**\n"
+                "• `/clone https://t.me/source/10 https://t.me/source/150 /Lectures`\n\n"
+                "4️⃣ **Forward & Reply:**\n"
+                "• Channel ka koi bhi message forward karke reply karein:\n"
+                "  `/clone /Physics`\n\n"
+                "🛑 **Stop Clone:** `/stopclone` ya inline button dabayein.\n\n"
+                "💡 *Note: Private channels ke liye bot ka us channel me Administrator hona zaroori hai.*"
+            )
+            await reply_text_safe(message, secret_help)
+            return
+
+        if message.from_user.id in active_clones and active_clones[message.from_user.id].is_running:
+            await reply_text_safe(
+                message,
+                "⚠️ **Ek clone task pehle se running hai!**\n\n"
+                "Pehle wale task ko cancel karne ke liye `/stopclone` likhein."
+            )
+            return
+
+        # Determine target mode
+        if not target_val:
+            target_val = f"/{source_chat}".replace("@", "")
+
+        is_target_channel = (
+            str(target_val).startswith("@") or
+            bool(re.match(r'^-?100\d+$', str(target_val))) or
+            "t.me/" in str(target_val)
+        )
+        target_mode = "channel" if is_target_channel else "drive"
+        if target_mode == "channel":
+            c_target, _ = parse_link_or_chat(str(target_val))
+            if c_target:
+                target_val = c_target
+
+        status_msg = await reply_text_safe(
+            message,
+            "🔄 **Initializing Channel Clone...** ⚡\n\n"
+            f"📡 **Source:** `{source_chat}`\n"
+            f"🎯 **Target:** `{target_val}`\n"
+            f"📍 **Range:** `#{start_id}` to `{'#' + str(end_id) if end_id else 'Latest'}`\n\n"
+            "⏳ Connecting to channel and verifying permissions...",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⏹️ Stop Cloning", callback_data="cb:stopclone")]
+            ])
+        )
+
+        session = CloneSession(
+            user_id=message.from_user.id,
+            source_chat=source_chat,
+            target_mode=target_mode,
+            target_val=target_val,
+            start_id=start_id,
+            end_id=end_id
+        )
+        session.status_msg = status_msg
+        active_clones[message.from_user.id] = session
+
+        task = asyncio.create_task(execute_channel_clone(session, u))
+        session.task = task
+        return
 
     # 1. /start or /help
     if text.lower() in ("/start", "/help"):
@@ -1262,10 +1720,14 @@ async def bot_callback_router(client: Client, query: CallbackQuery):
         )
         return
 
-def generate_progress_bar(percent: int, length: int = 10) -> str:
-    filled = int(round(length * percent / 100))
-    filled = max(0, min(length, filled))
-    return "█" * filled + "░" * (length - filled)
+    elif data == "cb:stopclone":
+        sess = active_clones.get(user.id)
+        if not sess or not sess.is_running:
+            await query.answer("Koi active clone task running nahi hai!", show_alert=True)
+            return
+        sess.is_running = False
+        await query.answer("⏹️ Cloning request received, stopping...")
+        return
 
 BATCH_DEBOUNCE_DELAY = 2.0
 
@@ -2151,10 +2613,13 @@ async def stream_file(message_id: int, request: Request, filename: str = "", tok
     total_to_send = (end - start) + 1 if file_size > 0 else 0
     disposition = "attachment" if dl == 1 else "inline"
 
+    safe_ascii_name = file_name.encode("ascii", "ignore").decode("ascii").replace('"', '').strip() or f"file_{message_id}"
+    quoted_utf8_name = urllib.parse.quote(file_name)
+
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(total_to_send),
-        "Content-Disposition": f'{disposition}; filename="{file_name}"',
+        "Content-Disposition": f'{disposition}; filename="{safe_ascii_name}"; filename*=UTF-8\'\'{quoted_utf8_name}',
     }
 
     if is_range:
@@ -2805,6 +3270,7 @@ async def serve_share_page(token: str):
 @app.get("/f/{token}", response_class=HTMLResponse)
 @app.get("/file/{token}", response_class=HTMLResponse)
 async def serve_file_share_page(token: str):
+    return await serve_ui()
     conn = sqlite3.connect("drive.db")
     c = conn.cursor()
     c.execute("SELECT name, mime_type FROM files WHERE share_token = ?", (token,))
