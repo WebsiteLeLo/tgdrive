@@ -2,7 +2,22 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Play, FileText, Share2, Check, ChevronRight, X, Sparkles, BookOpen, Atom, Calculator, FlaskConical, ClipboardList } from 'lucide-react';
 import VideoCard from './VideoCard';
 import NoteCard from './NoteCard';
-import { getFileTypeInfo } from '../utils';
+import { getFileTypeInfo, getAdminKey } from '../utils';
+
+function getSubjectAndChapter(folder, basePath) {
+  let rel = folder || '';
+  const bp = (basePath || '').replace(/\/+$/, '');
+  if (bp && rel.startsWith(bp)) {
+    rel = rel.substring(bp.length);
+  }
+  let parts = rel.split('/').filter(Boolean);
+  if (parts.length >= 3 && (parts[0].startsWith('@') || parts[0] === 'Code')) {
+    parts = parts.slice(2);
+  }
+  const subject = parts[0] || 'General';
+  const chapter = parts[1] || 'General Materials';
+  return { subject, chapter };
+}
 
 export default function CatalogPage({ shareToken, searchQuery }) {
   const [data, setData] = useState({ files: [], subfolders: [], stats: {}, base_path: '/', folder_name: '' });
@@ -22,11 +37,13 @@ export default function CatalogPage({ shareToken, searchQuery }) {
       setLoading(true);
       setError(null);
       try {
+        const adminKey = getAdminKey();
+        const headers = adminKey ? { 'x-auth': adminKey } : {};
         const url = shareToken 
           ? `/api/share/${encodeURIComponent(shareToken)}?all_files=true`
           : `/api/files?folder=${encodeURIComponent('/')}&all_files=true`;
         
-        const res = await fetch(url);
+        const res = await fetch(url, { headers });
         if (!res.ok) throw new Error('Failed to load course materials');
         const json = await res.json();
         setData(json);
@@ -44,16 +61,9 @@ export default function CatalogPage({ shareToken, searchQuery }) {
     const subjMap = {};
     const sCounts = { All: (data.files || []).length };
     const cCounts = {};
-    const basePath = (data.base_path || '').replace(/\/+$/, '');
 
     (data.files || []).forEach(f => {
-      let rel = f.folder || '';
-      if (basePath && rel.startsWith(basePath)) {
-        rel = rel.substring(basePath.length);
-      }
-      const parts = rel.split('/').filter(Boolean);
-      const subject = parts[0] || 'General';
-      const chapter = parts[1] || 'General Materials';
+      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path);
 
       if (!subjMap[subject]) {
         subjMap[subject] = new Set();
@@ -101,15 +111,8 @@ export default function CatalogPage({ shareToken, searchQuery }) {
 
   // Filter files by Subject & Chapter first
   const subjectFilteredFiles = useMemo(() => {
-    const basePath = (data.base_path || '').replace(/\/+$/, '');
     return (data.files || []).filter(f => {
-      let rel = f.folder || '';
-      if (basePath && rel.startsWith(basePath)) {
-        rel = rel.substring(basePath.length);
-      }
-      const parts = rel.split('/').filter(Boolean);
-      const subject = parts[0] || 'General';
-      const chapter = parts[1] || 'General Materials';
+      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path);
 
       if (selectedSubject !== 'All' && subject !== selectedSubject) {
         return false;

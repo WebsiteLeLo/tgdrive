@@ -2219,9 +2219,9 @@ def verify_auth(password: str):
     if password != ADMIN_PASS:
         raise HTTPException(status_code=401, detail="Invalid Admin Password")
 
-@app.get("/api/files")
+@app.api_route("/api/files", methods=["GET", "HEAD"])
 async def list_files(folder: str = "/", all_files: bool = False, x_auth: str = Header("")):
-    verify_auth(x_auth)
+    # Public read access allowed for viewing courses and library materials
     conn = sqlite3.connect("drive.db")
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
@@ -2274,7 +2274,9 @@ async def list_files(folder: str = "/", all_files: bool = False, x_auth: str = H
         "subfolders": sorted_subfolders,
         "subfolders_meta": subfolders_meta,
         "stats": stats,
-        "folder_token": get_folder_share_token(folder)
+        "folder_token": get_folder_share_token(folder),
+        "base_path": folder,
+        "folder_name": folder.split("/")[-1] if folder != "/" else "PWX Study Library"
     }
 
 @app.get("/api/folders/share-token")
@@ -2296,7 +2298,7 @@ async def regenerate_folder_token_api(request: Request, x_auth: str = Header("")
     conn.close()
     return {"path": path, "share_token": new_token, "share_url": f"/share/{new_token}"}
 
-@app.get("/api/share/{token}")
+@app.api_route("/api/share/{token}", methods=["GET", "HEAD"])
 async def get_shared_folder_files(token: str, subfolder: str = "", all_files: bool = False):
     conn = sqlite3.connect("drive.db")
     conn.row_factory = sqlite3.Row
