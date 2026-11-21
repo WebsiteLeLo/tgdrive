@@ -3358,10 +3358,21 @@ async def get_public_file_info(token: str):
     c = conn.cursor()
     c.execute("SELECT id, message_id, name, size, mime_type, folder, share_token, created_at FROM files WHERE share_token = ?", (token,))
     row = c.fetchone()
-    conn.close()
     if not row:
+        conn.close()
         raise HTTPException(status_code=404, detail="File not found or link has expired")
-    return dict(row)
+    file_data = dict(row)
+    folder = file_data.get("folder", "/")
+    folder_token = get_folder_share_token(folder)
+    c.execute(
+        "SELECT id, message_id, name, size, mime_type, share_token FROM files WHERE folder = ? ORDER BY id ASC",
+        (folder,)
+    )
+    siblings = [dict(r) for r in c.fetchall()]
+    conn.close()
+    file_data["folder_token"] = folder_token
+    file_data["siblings"] = siblings
+    return file_data
 
 @app.get("/share/{token}", response_class=HTMLResponse)
 async def serve_share_page(token: str):
@@ -3369,6 +3380,8 @@ async def serve_share_page(token: str):
 
 @app.get("/f/{token}", response_class=HTMLResponse)
 @app.get("/file/{token}", response_class=HTMLResponse)
+@app.get("/watch/{token}", response_class=HTMLResponse)
+@app.get("/v/{token}", response_class=HTMLResponse)
 async def serve_file_share_page(token: str):
     return await serve_ui()
     conn = sqlite3.connect("drive.db")

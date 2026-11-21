@@ -2736,6 +2736,514 @@
       50% { transform: scaleY(1); }
     }
 
+
+    /* ========================================================
+       MINIMALIST STREAMING PLATFORM PRO (CLEAN & FAST)
+       ======================================================== */
+    :root {
+      --bg-base: #0a0d14;
+      --bg-surface: #101522;
+      --bg-card: #141a29;
+      --bg-card-hover: #1c2438;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-active: #38bdf8;
+      --primary: #38bdf8;
+      --primary-hover: #0284c7;
+      --primary-glow: rgba(56, 189, 248, 0.25);
+      --accent: #6366f1;
+    }
+
+    body {
+      background: var(--bg-base);
+      color: #f8fafc;
+    }
+
+    /* Course Minimalist Header Bar */
+    .course-header-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 16px 0 20px 0;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+    }
+    .course-header-left {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .course-tag-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .live-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #38bdf8;
+      box-shadow: 0 0 10px #38bdf8;
+    }
+    .course-tag {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: #94a3b8;
+    }
+    .course-title {
+      font-size: 24px;
+      font-weight: 800;
+      color: #ffffff;
+      letter-spacing: -0.4px;
+      margin: 0;
+    }
+    .course-header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Primary Section Switcher: Video Lectures vs Notes & DPPs */
+    .media-section-tabs {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding: 4px;
+      background: rgba(16, 21, 34, 0.7);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      width: fit-content;
+    }
+    .section-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 22px;
+      border-radius: var(--radius-md);
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #94a3b8;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .section-tab:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .section-tab.active {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(99, 102, 241, 0.15) 100%);
+      color: #ffffff;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      box-shadow: 0 4px 14px rgba(56, 189, 248, 0.15);
+    }
+    .section-count-badge {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+    }
+    .section-tab.active .section-count-badge {
+      background: #38bdf8;
+      color: #080d16;
+    }
+
+    /* Horizontal Chapter Filter Pills */
+    .chapter-pills-scroll {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 4px 2px 14px 2px;
+      margin-bottom: 20px;
+      scrollbar-width: thin;
+    }
+    .chapter-pills-scroll::-webkit-scrollbar {
+      height: 4px;
+    }
+    .chapter-pills-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+    }
+    .chapter-pill {
+      background: rgba(20, 26, 41, 0.7);
+      border: 1px solid var(--border);
+      color: #94a3b8;
+      padding: 7px 16px;
+      border-radius: 9999px;
+      font-size: 12.5px;
+      font-weight: 500;
+      white-space: nowrap;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.18s ease;
+    }
+    .chapter-pill:hover {
+      background: rgba(28, 36, 56, 0.9);
+      border-color: rgba(56, 189, 248, 0.3);
+      color: #ffffff;
+    }
+    .chapter-pill.active {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: #38bdf8;
+      color: #38bdf8;
+      font-weight: 600;
+    }
+
+    /* Fast, Smooth 16:9 Video Cards */
+    .card-video {
+      text-decoration: none;
+      color: inherit;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+      cursor: pointer;
+    }
+    .card-video:hover {
+      transform: translateY(-3px);
+      border-color: rgba(56, 189, 248, 0.4);
+      box-shadow: 0 10px 24px -4px rgba(0, 0, 0, 0.5), 0 0 16px rgba(56, 189, 248, 0.15);
+    }
+    .card-video-thumb {
+      aspect-ratio: 16 / 9;
+      width: 100%;
+      background: #000000;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-video-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.3s ease;
+    }
+    .card-video:hover .card-video-img {
+      transform: scale(1.05);
+    }
+    .card-video-badge-top {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      background: rgba(10, 14, 23, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      backdrop-filter: blur(4px);
+      color: #38bdf8;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    .card-video-badge-bottom {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      background: rgba(0, 0, 0, 0.8);
+      color: #e2e8f0;
+      font-size: 10.5px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      backdrop-filter: blur(4px);
+    }
+    .card-play-hover-btn {
+      position: absolute;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.9);
+      color: #080d16;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 16px rgba(56, 189, 248, 0.5);
+      opacity: 0;
+      transform: scale(0.85);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .card-play-hover-btn svg {
+      width: 18px;
+      height: 18px;
+      margin-left: 2px;
+    }
+    .card-video:hover .card-play-hover-btn {
+      opacity: 1;
+      transform: scale(1);
+    }
+    .card-video-body {
+      padding: 12px 14px 14px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1;
+      justify-content: space-between;
+    }
+    .card-video-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #f1f5f9;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .card-video:hover .card-video-title {
+      color: #38bdf8;
+    }
+    .card-video-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 4px;
+      font-size: 11.5px;
+      color: #64748b;
+    }
+    .card-chapter-tag {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 2px 8px;
+      border-radius: 4px;
+      color: #94a3b8;
+      max-width: 140px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .card-open-arrow {
+      color: #64748b;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .card-video:hover .card-open-arrow {
+      color: #38bdf8;
+    }
+
+    /* Clean Notes & DPP Document Cards */
+    .card-doc {
+      text-decoration: none;
+      color: inherit;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .card-doc:hover {
+      background: var(--bg-card-hover);
+      border-color: rgba(245, 158, 11, 0.4);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px -4px rgba(0, 0, 0, 0.4);
+    }
+    .card-doc-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-md);
+      background: rgba(245, 158, 11, 0.12);
+      border: 1px solid rgba(245, 158, 11, 0.25);
+      color: #f59e0b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .card-doc-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .card-doc-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #f1f5f9;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
+    .card-doc:hover .card-doc-title {
+      color: #f59e0b;
+    }
+    .card-doc-meta {
+      font-size: 11.5px;
+      color: #64748b;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-open-doc {
+      background: rgba(245, 158, 11, 0.12);
+      color: #f59e0b;
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .card-doc:hover .btn-open-doc {
+      background: #f59e0b;
+      color: #090d16;
+    }
+
+    /* Infinite Scroll Load Sentinel */
+    .infinite-sentinel {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 30px 0;
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    /* Standalone Dedicated Watch Page */
+    .watch-page-container {
+      width: 100%;
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 16px 20px 40px 20px;
+      box-sizing: border-box;
+    }
+    .watch-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 12px;
+    }
+    .watch-back-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #94a3b8;
+      text-decoration: none;
+      font-size: 13.5px;
+      font-weight: 600;
+      padding: 8px 16px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      transition: all 0.18s ease;
+    }
+    .watch-back-btn:hover {
+      color: #ffffff;
+      border-color: rgba(255, 255, 255, 0.2);
+      transform: translateX(-2px);
+    }
+    .watch-stage-layout {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 24px;
+      align-items: start;
+    }
+    @media (max-width: 1024px) {
+      .watch-stage-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+    .watch-player-column {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .watch-player-host {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: var(--radius-xl);
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.8);
+    }
+    .watch-details-box {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .watch-lecture-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1.35;
+    }
+    .watch-lecture-meta {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      font-size: 12.5px;
+      color: #94a3b8;
+    }
+    .watch-sidebar-column {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      max-height: calc(100vh - 120px);
+      position: sticky;
+      top: 80px;
+    }
+    .watch-sidebar-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(16, 21, 34, 0.9);
+    }
+    .watch-sidebar-header h4 {
+      font-size: 14px;
+      font-weight: 700;
+      color: #f1f5f9;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .watch-playlist-scroll {
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      scrollbar-width: thin;
+    }
+    .watch-playlist-scroll::-webkit-scrollbar {
+      width: 5px;
+    }
+    .watch-playlist-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 4px;
+    }
+
 </style>
 </head>
 <body>
@@ -2918,44 +3426,49 @@
     <!-- Main Content Area -->
     <main class="content" id="contentArea">
 
-      <!-- Cinematic Streaming Hero Showcase -->
-      <div class="stream-hero" id="streamHero">
-        <div class="stream-hero-backdrop"></div>
-        <div class="stream-hero-content">
-          <div class="stream-tags-row">
-            <span class="stream-pill live"><span class="live-dot"></span> BATCH STREAM</span>
-            <span class="stream-pill quality">FULL HD 1080P</span>
-            <span class="stream-pill speed">BUFFERLESS STREAM</span>
+      
+      <!-- Minimalist Course Header Bar -->
+      <div class="course-header-bar">
+        <div class="course-header-left">
+          <div class="course-tag-row">
+            <span class="live-dot"></span>
+            <span class="course-tag">HD VIDEO LECTURES & STUDY PORTAL</span>
+            <span class="course-tag" id="courseStatsTag">• 0 Items</span>
           </div>
-          <h1 class="stream-hero-title" id="streamHeroTitle">PWX Stream Cinema</h1>
-          <p class="stream-hero-desc" id="streamHeroDesc">
-            High-Definition Chapter Lectures, Complete Video Sessions & Interactive Study Media
-          </p>
-          <div class="stream-hero-stats">
-            <div class="hero-stat-chip">
-              <svg class="icon icon-sm" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-              <span><strong id="heroCountText">0</strong> Lectures & Files</span>
-            </div>
-            <div class="hero-stat-chip">
-              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-              <span><strong id="heroSizeText">0 B</strong> Total Content</span>
-            </div>
-          </div>
-          <div class="stream-hero-actions">
-            <button class="btn-stream-play" id="btnHeroPlay" onclick="playFirstLecture()">
-              <svg class="icon icon-sm" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-              <span>Start Streaming</span>
-            </button>
-            <button class="btn-stream-share" onclick="openShareFolderModal()">
-              <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-              <span>Share Series</span>
-            </button>
-          </div>
+          <h1 class="course-title" id="courseTitleHeader">Lakshya JEE 2026</h1>
+          <div class="breadcrumbs-wrap" id="breadcrumbsWrap"></div>
+        </div>
+        <div class="course-header-right">
+          <button class="btn btn-secondary" id="btnShareFolder" onclick="openShareFolderModal()" title="Share Series Link">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            <span>Share Series</span>
+          </button>
+          <select class="sort-select" id="sortSelect" onchange="onSortChange()">
+            <option value="name-asc">Name (A to Z)</option>
+            <option value="date-desc">Newest First</option>
+            <option value="date-asc">Oldest First</option>
+            <option value="size-desc">Size (Largest)</option>
+          </select>
         </div>
       </div>
 
-      <!-- Horizontal Chapter / Subject Streaming Pills -->
-      <div class="stream-pills-bar" id="streamPillsBar"></div>
+      <!-- Primary Section Switcher: Video Lectures vs Notes & DPPs -->
+      <div class="media-section-tabs">
+        <button class="section-tab active" id="tabVideos" onclick="switchMediaSection('videos')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+          <span>Video Lectures</span>
+          <span class="section-count-badge" id="badgeVideoCount">0</span>
+        </button>
+        <button class="section-tab" id="tabNotes" onclick="switchMediaSection('notes')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>Notes & DPPs</span>
+          <span class="section-count-badge" id="badgeNotesCount">0</span>
+        </button>
+      </div>
+
+      <!-- Chapter Filter Pills -->
+      <div class="chapter-pills-scroll" id="chapterPillsScroll"></div>
+
 
       <!-- Breadcrumb & Top Filter Controls -->
       <div class="header-bar">
@@ -3249,7 +3762,7 @@
 
     function checkPublicShareMode() {
       const path = window.location.pathname;
-      const fileMatch = path.match(/\/(?:f|file)\/([a-zA-Z0-9_\-]+)/);
+      const fileMatch = path.match(/\/(?:f|file|watch|v)\/([a-zA-Z0-9_\-]+)/);
       const folderMatch = path.match(/\/share\/([a-zA-Z0-9_\-]+)/);
       const urlParams = new URLSearchParams(window.location.search);
 
@@ -3297,23 +3810,16 @@
       const sidebar = document.getElementById('sidebar');
       if (sidebar) sidebar.style.display = 'none';
 
-      const breadcrumbsWrap = document.getElementById('breadcrumbsWrap');
-      const viewToggle = document.querySelector('.view-toggle');
-      const searchBox = document.querySelector('.search-box');
-      const btnShareFolder = document.getElementById('btnShareFolder');
-      const folderToolbar = document.querySelector('.folder-toolbar');
-
-      if (viewToggle) viewToggle.style.display = 'none';
-      if (searchBox) searchBox.style.display = 'none';
-      if (btnShareFolder) btnShareFolder.style.display = 'none';
-      if (folderToolbar) folderToolbar.style.display = 'none';
+      const topbar = document.querySelector('.topbar');
+      if (topbar) topbar.style.display = 'none';
 
       const contentArea = document.querySelector('.content');
       if (contentArea) {
+        contentArea.style.padding = '0';
         contentArea.innerHTML = `
-          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; color:var(--text-muted); font-size:14px;">
+          <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:80vh; color:var(--text-muted); font-size:14px;">
             <div class="pdf-spinner" style="margin-bottom:14px;"></div>
-            <div>Loading file preview stream...</div>
+            <div>Loading stream cinema...</div>
           </div>
         `;
       }
@@ -3321,109 +3827,128 @@
       try {
         const res = await fetch(`/api/f/${encodeURIComponent(token)}`);
         if (!res.ok) {
-          throw new Error(res.status === 404 ? 'File not found or link has expired' : 'Failed to load file');
+          throw new Error(res.status === 404 ? 'Lecture not found or link has expired' : 'Failed to load video stream');
         }
         const file = await res.json();
         const typeInfo = getFileTypeInfo(file.mime_type, file.name);
         const streamUrl = `/stream/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
-        const dlUrl = `${streamUrl}&dl=1`;
+        const thumbUrl = `/thumb/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
+        const backUrl = file.folder_token ? `/share/${file.folder_token}` : '/';
 
-        // Configure Topbar Action Buttons
-        const authPill = document.getElementById('authPill');
-        if (authPill) {
-          authPill.innerHTML = `
-            <div style="display:flex; align-items:center; gap:8px;">
-              <button class="btn btn-secondary" onclick="copyFileShareLink('${file.share_token}')" style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; padding:7px 14px;">
-                <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-                <span>Share</span>
-              </button>
-              <button class="btn btn-primary" onclick="copyFileShareLink('${file.share_token}')" style="display:inline-flex; align-items:center; gap:6px; font-size:12.5px; padding:7px 16px;">
-                <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-                <span>Share Stream Link</span>
-              </button>
-            </div>
-          `;
-          authPill.onclick = null;
-        }
+        if (typeInfo.isVideo) {
+          const siblings = file.siblings || [];
+          const videoSiblings = siblings.filter(s => getFileTypeInfo(s.mime_type, s.name).isVideo);
 
-        if (breadcrumbsWrap) {
-          breadcrumbsWrap.innerHTML = `
-            <div style="display:flex; align-items:center; gap:10px; overflow:hidden;">
-              <span style="font-size:22px;">${typeInfo.icon}</span>
-              <div style="display:flex; flex-direction:column; min-width:0;">
-                <span style="font-weight:700; font-size:14.5px; color:var(--text-main); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:55vw;" title="${escapeHtml(file.name)}">${escapeHtml(file.name)}</span>
-                <span style="font-size:11.5px; color:var(--text-muted);">${formatBytes(file.size)} • ${escapeHtml(file.mime_type)}</span>
+          contentArea.innerHTML = `
+            <div class="watch-page-container">
+              <div class="watch-topbar">
+                <a href="${backUrl}" class="watch-back-btn">
+                  <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+                  <span>Back to Series</span>
+                </a>
+                <div style="display:flex; align-items:center; gap:10px;">
+                  <button class="btn btn-secondary" onclick="navigator.clipboard.writeText(window.location.href); showToast('Watch link copied to clipboard!', 'success');">
+                    <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                    <span>Share Lecture</span>
+                  </button>
+                </div>
+              </div>
+
+              <div class="watch-stage-layout">
+                <div class="watch-player-column">
+                  <div class="watch-player-host" id="singleWatchHost"></div>
+                  <div class="watch-details-box">
+                    <h1 class="watch-lecture-title">${escapeHtml(file.name)}</h1>
+                    <div class="watch-lecture-meta">
+                      <span class="card-chapter-tag">${escapeHtml(file.folder.split('/').filter(Boolean).pop() || 'General')}</span>
+                      <span>${formatBytes(file.size)}</span>
+                      <span>•</span>
+                      <span>Full HD 1080p Stream</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="watch-sidebar-column">
+                  <div class="watch-sidebar-header">
+                    <h4>
+                      <svg class="icon icon-sm" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                      <span>Chapter Lectures</span>
+                    </h4>
+                    <span class="section-count-badge">${videoSiblings.length} Episodes</span>
+                  </div>
+                  <div class="watch-playlist-scroll">
+                    ${videoSiblings.map((vf, idx) => {
+                      const isCurrent = vf.id === file.id;
+                      const vThumb = `/thumb/${vf.message_id}?token=${encodeURIComponent(vf.share_token)}`;
+                      return `
+                        <a href="/watch/${encodeURIComponent(vf.share_token)}" class="playlist-card ${isCurrent ? 'active' : ''}">
+                          <div class="playlist-thumb">
+                            <img src="${vThumb}" loading="lazy" onerror="this.style.display='none';">
+                          </div>
+                          <div class="playlist-info">
+                            <div class="playlist-title" title="${escapeHtml(vf.name)}">${escapeHtml(vf.name)}</div>
+                            <div class="playlist-meta">
+                              ${isCurrent ? `
+                                <span class="now-playing-tag">
+                                  <span class="equalizer-anim">
+                                    <span class="equalizer-bar"></span>
+                                    <span class="equalizer-bar"></span>
+                                    <span class="equalizer-bar"></span>
+                                  </span>
+                                  NOW PLAYING
+                                </span>
+                              ` : `
+                                <span>${formatBytes(vf.size)}</span>
+                                <span>•</span>
+                                <span>#${idx + 1}</span>
+                              `}
+                            </div>
+                          </div>
+                        </a>
+                      `;
+                    }).join('')}
+                  </div>
+                </div>
               </div>
             </div>
           `;
-        }
 
-        // Render Preview
-        if (typeInfo.isPdf) {
+          initCustomVideoPlayer(document.getElementById('singleWatchHost'), streamUrl, file.name, thumbUrl);
+
+          // Auto-play next episode on ended
+          const vidEl = document.getElementById('svpVideo');
+          if (vidEl) {
+            vidEl.onended = () => {
+              const currentIdx = videoSiblings.findIndex(vf => vf.id === file.id);
+              if (currentIdx !== -1 && currentIdx + 1 < videoSiblings.length) {
+                const nextVideo = videoSiblings[currentIdx + 1];
+                showToast(`Auto-playing next: ${nextVideo.name}`, 'info');
+                window.location.href = `/watch/${encodeURIComponent(nextVideo.share_token)}`;
+              }
+            };
+          }
+        } else if (typeInfo.isPdf) {
           contentArea.innerHTML = `
-            <div style="width:100%; height:calc(100vh - 64px);">
-              <div id="singlePdfHost" style="width:100%; height:100%;"></div>
+            <div style="width:100%; height:100vh; display:flex; flex-direction:column; background:#0b0e14;">
+              <div style="padding:10px 16px; background:#101522; border-bottom:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; justify-content:space-between;">
+                <a href="${backUrl}" class="watch-back-btn">
+                  <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+                  <span>Back to Series</span>
+                </a>
+                <span style="font-weight:600; font-size:14px; color:#f1f5f9;">${escapeHtml(file.name)}</span>
+                <button class="btn btn-secondary" onclick="navigator.clipboard.writeText(window.location.href); showToast('Link copied!', 'success');">Share</button>
+              </div>
+              <div id="singlePdfHost" style="flex:1; width:100%; height:calc(100vh - 54px);"></div>
             </div>
           `;
           initPdfViewer(streamUrl, file.name, document.getElementById('singlePdfHost'));
-        } else if (typeInfo.isVideo) {
-          contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:calc(100vh - 64px); padding:16px; box-sizing:border-box; width:100%;">
-              <div id="singleVideoHost" style="width:100%; max-width:1150px; height:calc(100vh - 96px); max-height:85vh;"></div>
-            </div>
-          `;
-          const thumbUrl = `/thumb/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
-          initCustomVideoPlayer(document.getElementById('singleVideoHost'), streamUrl, file.name, thumbUrl);
-        } else if (typeInfo.isAudio) {
-          contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:calc(100vh - 64px); padding:20px;">
-              <div style="background:var(--bg-surface); border:1px solid var(--border); padding:36px; border-radius:var(--radius-xl); width:100%; max-width:540px; text-align:center; box-shadow:var(--shadow-lg);">
-                <div style="margin-bottom:16px;"><svg class="icon" style="width:54px; height:54px; color:var(--primary);" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
-                <h3 style="font-size:17px; margin-bottom:8px; color:var(--text-main);">${escapeHtml(file.name)}</h3>
-                <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:20px;">${formatBytes(file.size)}</p>
-                <audio src="${streamUrl}" controls autoplay style="width:100%; margin-bottom:20px;"></audio>
-                <button class="btn btn-primary" onclick="copyFileShareLink('${file.share_token}')">Share Audio Stream</button>
-              </div>
-            </div>
-          `;
-        } else if (typeInfo.isImage) {
-          contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:calc(100vh - 64px); padding:20px;">
-              <img src="${streamUrl}" alt="${escapeHtml(file.name)}" style="max-height:82vh; max-width:95vw; object-fit:contain; border-radius:var(--radius-lg); box-shadow:var(--shadow-lg);">
-            </div>
-          `;
-        } else if (typeInfo.isCode || typeInfo.isText) {
-          try {
-            let text = '';
-            let isTruncated = false;
-            if (file.size > 512 * 1024) {
-              isTruncated = true;
-              const res = await fetch(streamUrl, { headers: { 'Range': 'bytes=0-524287' } });
-              text = await res.text();
-            } else {
-              const res = await fetch(streamUrl);
-              text = await res.text();
-            }
-            contentArea.innerHTML = `
-              <div style="width:100%; max-width:1100px; margin:0 auto; padding:20px;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                  <span style="font-size:12px; color:var(--text-muted);">${formatBytes(file.size)}${isTruncated ? ' (Showing first 512 KB preview)' : ''}</span>
-                  <button class="btn btn-secondary" onclick="navigator.clipboard.writeText(document.getElementById('singleCodeBlock').innerText); showToast('Code copied to clipboard', 'success');">Copy Code</button>
-                </div>
-                <div class="code-viewer-wrap" id="singleCodeBlock" style="height:calc(100vh - 150px);">${escapeHtml(text)}</div>
-              </div>
-            `;
-          } catch (e) {
-            contentArea.innerHTML = `<div style="color:var(--danger); text-align:center; padding:40px;">Failed to load text preview</div>`;
-          }
         } else {
           contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; height:calc(100vh - 64px); padding:20px;">
-              <div style="background:var(--bg-surface); border:1px solid var(--border); padding:40px; border-radius:var(--radius-xl); text-align:center; max-width:440px; box-shadow:var(--shadow-lg);">
-                <div style="font-size:58px; margin-bottom:16px;">${typeInfo.icon}</div>
-                <h3 style="font-size:17px; margin-bottom:8px; color:var(--text-main);">${escapeHtml(file.name)}</h3>
-                <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:24px;">${formatBytes(file.size)} • ${escapeHtml(file.mime_type)}</p>
-                <button class="btn btn-primary" onclick="copyFileShareLink('${file.share_token}')">Share Stream Link</button>
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:80vh; padding:20px;">
+              <div style="background:var(--bg-surface); border:1px solid var(--border); padding:36px; border-radius:var(--radius-xl); text-align:center; max-width:440px;">
+                <h3 style="font-size:18px; margin-bottom:8px; color:var(--text-main);">${escapeHtml(file.name)}</h3>
+                <p style="font-size:13px; color:var(--text-muted); margin-bottom:20px;">${formatBytes(file.size)}</p>
+                <a href="${backUrl}" class="btn btn-secondary">Back to Series</a>
               </div>
             </div>
           `;
@@ -3431,10 +3956,9 @@
       } catch (err) {
         if (contentArea) {
           contentArea.innerHTML = `
-            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; text-align:center; padding:20px;">
-              <div style="margin-bottom:16px;"><svg class="icon" style="width:48px; height:48px; color:var(--danger);" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
-              <h3 style="font-size:18px; margin-bottom:8px; color:var(--text-main);">File Not Available</h3>
-              <p style="color:var(--text-muted); font-size:13px; max-width:400px; margin-bottom:20px;">${escapeHtml(err.message || 'The link may have expired or is invalid.')}</p>
+            <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:70vh; text-align:center; padding:20px;">
+              <h3 style="font-size:18px; margin-bottom:8px; color:var(--text-main);">Lecture Unavailable</h3>
+              <p style="color:var(--text-muted); font-size:13px; margin-bottom:20px;">${escapeHtml(err.message || 'Link has expired')}</p>
               <a class="btn btn-secondary" href="/">Go to Home</a>
             </div>
           `;
@@ -3937,158 +4461,212 @@
       return files;
     }
 
+    
+    // Media Section Management (videos vs notes)
+    let currentMediaSection = 'videos'; // 'videos' or 'notes'
+    let visibleRenderCount = 36;
+    const RENDER_BATCH_SIZE = 36;
+    let infiniteObserver = null;
+
+    function switchMediaSection(sec) {
+      currentMediaSection = sec;
+      visibleRenderCount = RENDER_BATCH_SIZE;
+      document.getElementById('tabVideos').classList.toggle('active', sec === 'videos');
+      document.getElementById('tabNotes').classList.toggle('active', sec === 'notes');
+      renderFiles();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function renderChapterPills() {
+      const container = document.getElementById('chapterPillsScroll');
+      if (!container) return;
+
+      const subfolders = subfoldersList || [];
+      if (subfolders.length === 0) {
+        container.style.display = 'none';
+        return;
+      }
+
+      container.style.display = 'flex';
+      const rootPath = isPublicShare ? (sharedBasePath || '/') : '/';
+      const isRootActive = currentFolder === rootPath;
+
+      let html = `
+        <button class="chapter-pill ${isRootActive ? 'active' : ''}" onclick="switchFolder('${rootPath}')">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+          <span>All Chapters</span>
+        </button>
+      `;
+
+      html += subfolders.map(sf => {
+        const name = sf.split('/').filter(Boolean).pop() || sf;
+        const isActive = currentFolder === sf;
+        return `
+          <button class="chapter-pill ${isActive ? 'active' : ''}" onclick="switchFolder('${escapeHtml(sf)}')">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            <span>${escapeHtml(name)}</span>
+          </button>
+        `;
+      }).join('');
+
+      container.innerHTML = html;
+    }
+
+    // High-performance filter logic
+    function getSectionFilteredFiles() {
+      const q = (searchInput.value || '').trim().toLowerCase();
+      let files = allFiles;
+
+      // Filter by active media section
+      if (currentMediaSection === 'videos') {
+        files = files.filter(f => {
+          const ti = getFileTypeInfo(f.mime_type, f.name);
+          return ti.isVideo;
+        });
+      } else if (currentMediaSection === 'notes') {
+        files = files.filter(f => {
+          const ti = getFileTypeInfo(f.mime_type, f.name);
+          return !ti.isVideo;
+        });
+      }
+
+      // Filter by search query in memory (instant 1ms)
+      if (q) {
+        files = files.filter(f => f.name.toLowerCase().includes(q) || f.folder.toLowerCase().includes(q));
+      }
+
+      // Sort
+      const sortVal = document.getElementById('sortSelect').value;
+      files.sort((a, b) => {
+        if (sortVal === 'name-asc') return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        if (sortVal === 'name-desc') return b.name.localeCompare(a.name, undefined, { numeric: true, sensitivity: 'base' });
+        if (sortVal === 'date-desc') return new Date(b.created_at) - new Date(a.created_at);
+        if (sortVal === 'date-asc') return new Date(a.created_at) - new Date(b.created_at);
+        if (sortVal === 'size-desc') return b.size - a.size;
+        return 0;
+      });
+
+      return files;
+    }
+
     function renderFiles() {
-      const filtered = getFilteredFiles();
+      const allFiltered = getSectionFilteredFiles();
       const container = document.getElementById('fileContainer');
       const emptyState = document.getElementById('emptyState');
       const countHeader = document.getElementById('filesCountHeader');
 
-      countHeader.innerText = `Episodes & Files (${filtered.length})`;
+      // Update Section Count Badges
+      const totalVideos = allFiles.filter(f => getFileTypeInfo(f.mime_type, f.name).isVideo).length;
+      const totalNotes = allFiles.length - totalVideos;
+      const bVid = document.getElementById('badgeVideoCount');
+      const bNot = document.getElementById('badgeNotesCount');
+      if (bVid) bVid.innerText = totalVideos;
+      if (bNot) bNot.innerText = totalNotes;
 
-      if (filtered.length === 0 && (currentCategory !== 'all' || subfoldersList.length === 0)) {
+      const titleHeader = document.getElementById('courseTitleHeader');
+      if (titleHeader) {
+        let displayName = isPublicShare ? (sharedFolderName || 'Shared Series') : (currentFolder === '/' ? 'Study Materials' : currentFolder.split('/').filter(Boolean).pop());
+        titleHeader.innerText = displayName;
+      }
+      const statsTag = document.getElementById('courseStatsTag');
+      if (statsTag) {
+        statsTag.innerText = `• ${allFiles.length} Total Items`;
+      }
+
+      renderChapterPills();
+
+      if (countHeader) {
+        countHeader.innerText = `${currentMediaSection === 'videos' ? 'Lectures' : 'Notes & DPPs'} (${allFiltered.length})`;
+      }
+
+      if (allFiltered.length === 0) {
         container.style.display = 'none';
         emptyState.style.display = 'block';
         return;
       }
 
       emptyState.style.display = 'none';
-      container.style.display = viewMode === 'grid' ? 'grid' : 'flex';
+      container.style.display = 'grid';
 
-      if (viewMode === 'list') {
-        let listHtml = `
-          <div class="list-header">
-            <div class="list-col-check">
-              <input type="checkbox" onchange="toggleSelectAll(this.checked)" ${filtered.length > 0 && selectedFileIds.size === filtered.length ? 'checked' : ''}>
-            </div>
-            <div class="list-col-name">Episode / Lecture</div>
-            <div class="list-col-folder">Chapter</div>
-            <div class="list-col-size">Size</div>
-            <div class="list-col-date">Uploaded</div>
-            <div class="list-col-actions" style="width:110px;">Stream</div>
-          </div>
-        `;
+      // Slice for instant 60 FPS performance (render only first visibleRenderCount)
+      const visibleBatch = allFiltered.slice(0, visibleRenderCount);
 
-        listHtml += filtered.map(f => {
-          const typeInfo = getFileTypeInfo(f.mime_type, f.name);
+      if (currentMediaSection === 'videos') {
+        container.className = 'file-grid';
+        container.innerHTML = visibleBatch.map(f => {
           const ext = getFileExtension(f.name);
-          const streamUrl = `/stream/${f.message_id}?token=${encodeURIComponent(f.share_token)}`;
-          const dateStr = f.created_at ? f.created_at.split(' ')[0] : '';
-          const isSelected = selectedFileIds.has(f.id);
-
           const thumbUrl = `/thumb/${f.message_id}?token=${encodeURIComponent(f.share_token)}`;
-          let thumbContent = `<div class="media-badge ${typeInfo.cls}" style="width:34px; height:34px; font-size:16px;">${typeInfo.icon}</div>`;
-          if (typeInfo.isImage || typeInfo.isVideo) {
-            thumbContent = `<div class="list-thumb"><img src="${thumbUrl}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"><div class="media-badge ${typeInfo.cls}" style="display:none; width:34px; height:34px; font-size:16px;">${typeInfo.icon}</div></div>`;
-          }
+          const chapterName = f.folder.split('/').filter(Boolean).pop() || 'General';
 
           return `
-            <div class="list-row ${isSelected ? 'selected' : ''}">
-              <div class="list-col-check">
-                <input type="checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelectFile(${f.id}, event)">
+            <a href="/watch/${encodeURIComponent(f.share_token)}" target="_blank" class="card-video" rel="noopener">
+              <div class="card-video-thumb">
+                <span class="card-video-badge-top">1080p HD</span>
+                <img class="card-video-img" src="${thumbUrl}" loading="lazy" onerror="this.style.display='none';">
+                <div class="card-play-hover-btn">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+                </div>
+                <span class="card-video-badge-bottom">${formatBytes(f.size)}</span>
               </div>
-              <div class="list-col-name" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
-                ${thumbContent}
-                <div class="list-name-text" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+              <div class="card-video-body">
+                <div class="card-video-title" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+                <div class="card-video-footer">
+                  <span class="card-chapter-tag">${escapeHtml(chapterName)}</span>
+                  <span class="card-open-arrow">
+                    <span>Watch</span>
+                    <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                  </span>
+                </div>
               </div>
-              <div class="list-col-folder">${escapeHtml(f.folder)}</div>
-              <div class="list-col-size">${formatBytes(f.size)}</div>
-              <div class="list-col-date">${dateStr}</div>
-              <div class="list-col-actions">
-                <button class="btn-act btn-act-icon" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})" title="Stream Lecture">
-                  <svg class="icon icon-sm" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-                </button>
-                <button class="btn-act btn-act-icon" onclick="copyFileShareLink('${f.share_token}')" title="Copy Stream Link">
-                  <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-                </button>
-                ${!isPublicShare ? `
-                <button class="btn-act btn-act-icon btn-act-del" onclick="confirmDeleteFile(${f.id}, '${escapeHtml(f.name)}')" title="Delete">
-                  <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-                </button>` : ''}
-              </div>
-            </div>
+            </a>
           `;
         }).join('');
+      } else {
+        // Notes & DPPs section: clean document cards
+        container.className = 'file-grid';
+        container.innerHTML = visibleBatch.map(f => {
+          const ext = (getFileExtension(f.name) || 'PDF').toUpperCase();
+          const chapterName = f.folder.split('/').filter(Boolean).pop() || 'Notes';
 
-        container.innerHTML = listHtml;
-        return;
+          return `
+            <a href="/watch/${encodeURIComponent(f.share_token)}" target="_blank" class="card-doc" rel="noopener">
+              <div class="card-doc-icon">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </div>
+              <div class="card-doc-info">
+                <div class="card-doc-title" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+                <div class="card-doc-meta">
+                  <span class="card-chapter-tag">${escapeHtml(chapterName)}</span>
+                  <span>${formatBytes(f.size)}</span>
+                  <span>•</span>
+                  <span>${ext}</span>
+                </div>
+              </div>
+              <div class="btn-open-doc">
+                <span>Open Notes</span>
+                <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </div>
+            </a>
+          `;
+        }).join('');
       }
 
-      // Grid View - 16:9 Cinematic Video Posters
-      container.innerHTML = filtered.map(f => {
-        const typeInfo = getFileTypeInfo(f.mime_type, f.name);
-        const ext = getFileExtension(f.name);
-        const streamUrl = `/stream/${f.message_id}?token=${encodeURIComponent(f.share_token)}`;
-        const dateStr = f.created_at ? f.created_at.split(' ')[0] : '';
-        const isSelected = selectedFileIds.has(f.id);
-        const thumbUrl = `/thumb/${f.message_id}?token=${encodeURIComponent(f.share_token)}`;
+      // Append infinite scroll loader if more items remain
+      if (visibleRenderCount < allFiltered.length) {
+        const sentinel = document.createElement('div');
+        sentinel.className = 'infinite-sentinel';
+        sentinel.innerHTML = `<span>Loading more ${currentMediaSection}... (${visibleBatch.length} / ${allFiltered.length})</span>`;
+        container.appendChild(sentinel);
 
-        let badgeTop = typeInfo.isVideo ? '1080p HD' : (typeInfo.isPdf ? 'PDF NOTE' : 'MEDIA');
-        let previewHtml = '';
-
-        if (typeInfo.isImage) {
-          previewHtml = `
-            <div class="card-preview" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
-              <span class="card-badge-top">IMAGE</span>
-              <img class="card-thumb-img" src="${thumbUrl}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-              <div class="media-badge ${typeInfo.cls}" style="display:none; width:48px; height:48px;">${typeInfo.icon}</div>
-              <span class="card-badge-bottom">${formatBytes(f.size)}</span>
-            </div>`;
-        } else if (typeInfo.isVideo) {
-          previewHtml = `
-            <div class="card-preview" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
-              <span class="card-badge-top">1080p HD</span>
-              <img class="card-thumb-img" src="${thumbUrl}" loading="lazy" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-              <div class="media-badge ${typeInfo.cls}" style="display:none; width:48px; height:48px;">
-                ${typeInfo.icon}
-              </div>
-              <div class="card-thumb-overlay"></div>
-              <div class="card-play-overlay">
-                <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-              </div>
-              <span class="card-badge-bottom">${formatBytes(f.size)}</span>
-            </div>`;
-        } else {
-          previewHtml = `
-            <div class="card-preview" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
-              <span class="card-badge-top">${badgeTop}</span>
-              <div class="media-badge ${typeInfo.cls}">
-                ${typeInfo.icon}
-              </div>
-              <span class="card-badge-bottom">${formatBytes(f.size)}</span>
-            </div>`;
-        }
-
-        const buttonText = typeInfo.isVideo ? 'Stream Lecture' : (typeInfo.isPdf ? 'Read Notes' : 'Open');
-
-        return `
-          <div class="card ${isSelected ? 'selected' : ''}">
-            <input type="checkbox" class="card-checkbox" ${isSelected ? 'checked' : ''} onchange="toggleSelectFile(${f.id}, event)">
-            ${previewHtml}
-            <div class="card-meta" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
-              <div class="card-title" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
-              <div class="card-sub">
-                <span class="card-ext-tag">${ext ? ext.toUpperCase() : 'MEDIA'}</span>
-                <span>${escapeHtml(f.folder.split('/').filter(Boolean).pop() || 'General')}</span>
-                <span>•</span>
-                <span>${dateStr}</span>
-              </div>
-            </div>
-            <div class="card-actions" style="margin-top:10px; display:flex; align-items:center; gap:8px;">
-              <button class="btn-stream-now" onclick="openFilePreview(${JSON.stringify(f).replace(/"/g, '&quot;')})">
-                <svg class="icon icon-sm" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 3 20 12 6 21 6 3"/></svg>
-                <span>${buttonText}</span>
-              </button>
-              <button class="btn-act btn-act-icon" onclick="copyFileShareLink('${f.share_token}')" title="Copy Stream Link">
-                <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-              </button>
-              ${!isPublicShare ? `
-              <button class="btn-act btn-act-icon btn-act-del" onclick="confirmDeleteFile(${f.id}, '${escapeHtml(f.name)}')" title="Delete">
-                <svg class="icon icon-sm" viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              </button>` : ''}
-            </div>
-          </div>
-        `;
-      }).join('');
+        if (infiniteObserver) infiniteObserver.disconnect();
+        infiniteObserver = new IntersectionObserver((entries) => {
+          if (entries[0].isIntersecting) {
+            visibleRenderCount += RENDER_BATCH_SIZE;
+            renderFiles();
+          }
+        }, { rootMargin: '400px' });
+        infiniteObserver.observe(sentinel);
+      }
     }
 
     function onSearchInput() {
