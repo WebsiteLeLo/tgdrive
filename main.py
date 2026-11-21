@@ -2711,7 +2711,7 @@ async def stream_file(message_id: int, request: Request, filename: str = "", tok
         end = min(end, file_size - 1)
 
     total_to_send = (end - start) + 1 if file_size > 0 else 0
-    disposition = "attachment" if dl == 1 else "inline"
+    disposition = "inline"
 
     safe_ascii_name = file_name.encode("ascii", "ignore").decode("ascii").replace('"', '').strip() or f"file_{message_id}"
     quoted_utf8_name = urllib.parse.quote(file_name)
