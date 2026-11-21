@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Share2, Play, Check } from 'lucide-react';
+import { ArrowLeft, Share2, Play, Check, Download } from 'lucide-react';
 import CinemaPlayer from './CinemaPlayer';
 import { formatBytes, getFileTypeInfo } from '../utils';
 
@@ -82,31 +82,56 @@ export default function WatchPage({ token }) {
 
   // If PDF / Document: Fullscreen clean PDF reader
   if (typeInfo.isPdf) {
+    const downloadUrl = `/stream/${file.message_id}/${encodeURIComponent(file.name)}?token=${encodeURIComponent(file.share_token)}&dl=1`;
+
     return (
       <div className="min-h-screen flex flex-col bg-[#080c14]">
         {/* Topbar */}
-        <div className="h-14 bg-[#0d1322] border-b border-white/10 px-4 flex items-center justify-between gap-4">
-          <a href={backUrl} className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300 hover:text-white transition">
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Series</span>
-          </a>
-          <span className="text-xs sm:text-sm font-semibold text-slate-200 truncate max-w-md">
-            {file.name}
-          </span>
-          <button 
-            onClick={handleCopyLink}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300 hover:text-white transition"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5 text-sky-400" />}
-            <span>{copied ? 'Copied' : 'Share'}</span>
-          </button>
-        </div>
-        {/* Native PDF / Stream Frame */}
-        <div className="flex-1 w-full bg-slate-950">
+        <header className="h-16 bg-[#0d1322] border-b border-white/10 px-4 sm:px-6 flex items-center justify-between gap-4 z-20">
+          <div className="flex items-center gap-3 min-w-0">
+            <a 
+              href={backUrl} 
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300 hover:text-white transition flex-shrink-0 cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back</span>
+            </a>
+            <div className="min-w-0">
+              <h2 className="text-xs sm:text-sm font-bold text-white truncate max-w-sm sm:max-w-md" title={file.name}>
+                {file.name}
+              </h2>
+              <span className="text-[11px] text-amber-400/90 font-medium truncate block">
+                {displayChapter} • {formatBytes(file.size)}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+            <a 
+              href={downloadUrl}
+              download={file.name}
+              className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shadow-md shadow-amber-500/20 transition cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Download PDF</span>
+            </a>
+
+            <button 
+              onClick={handleCopyLink}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300 hover:text-white transition cursor-pointer"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Share2 className="w-3.5 h-3.5 text-sky-400" />}
+              <span className="hidden sm:inline">{copied ? 'Copied' : 'Share'}</span>
+            </button>
+          </div>
+        </header>
+
+        {/* PDF Frame */}
+        <div className="flex-1 w-full bg-slate-950 relative">
           <iframe 
             src={streamUrl} 
             title={file.name}
-            className="w-full h-[calc(100vh-56px)] border-none"
+            className="w-full h-[calc(100vh-64px)] border-none"
           />
         </div>
       </div>

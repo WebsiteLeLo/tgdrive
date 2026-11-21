@@ -1,9 +1,10 @@
 import React from 'react';
-import { FileText, ExternalLink } from 'lucide-react';
+import { FileText, ExternalLink, Download } from 'lucide-react';
 import { formatBytes, getFileExtension } from '../utils';
 
 export default function NoteCard({ file }) {
   const watchUrl = `/watch/${encodeURIComponent(file.share_token)}`;
+  const downloadUrl = `/stream/${file.message_id}/${encodeURIComponent(file.name)}?token=${encodeURIComponent(file.share_token)}&dl=1`;
   const ext = (getFileExtension(file.name) || 'PDF').toUpperCase();
   
   const parts = (file.folder || '').split('/').filter(Boolean);
@@ -47,8 +48,19 @@ export default function NoteCard({ file }) {
         </div>
       </div>
 
-      {/* Action Button */}
-      <div className="flex-shrink-0">
+      {/* Action Buttons */}
+      <div className="flex items-center gap-2 flex-shrink-0">
+        <a
+          href={downloadUrl}
+          download={file.name}
+          onClick={(e) => e.stopPropagation()}
+          title="Download PDF"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-amber-500 hover:text-slate-950 border border-white/10 text-slate-300 text-xs font-semibold transition-all duration-200 cursor-pointer shadow-sm"
+        >
+          <Download className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Download</span>
+        </a>
+
         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/20 group-hover:bg-amber-500 text-amber-400 group-hover:text-slate-950 text-xs font-semibold transition-all duration-200">
           <span>Open</span>
           <ExternalLink className="w-3.5 h-3.5" />

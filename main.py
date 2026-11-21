@@ -2666,14 +2666,15 @@ async def stream_file(message_id: int, request: Request, filename: str = "", tok
     media = getattr(msg, msg.media.value)
     file_size = media.file_size
     file_name = filename or getattr(media, "file_name", f"file_{message_id}")
-    mime_type = getattr(media, "mime_type", "application/octet-stream")
+    mime_type = getattr(media, "mime_type", None)
+
+    guessed_type, _ = mimetypes.guess_type(file_name)
+    if guessed_type:
+        mime_type = guessed_type
+    elif not mime_type or mime_type == "application/octet-stream":
+        mime_type = "application/pdf" if file_name.lower().endswith(".pdf") else "application/octet-stream"
 
     range_header = request.headers.get("Range", "").strip()
-
-    # If normal web browser top-level navigation, redirect to instant web preview page
-    accept = request.headers.get("Accept", "")
-    if dl != 1 and not range_header and "text/html" in accept and token:
-        return RedirectResponse(url=f"/f/{token}", status_code=302)
 
     is_range = False
     start = 0
@@ -2720,7 +2721,8 @@ async def stream_file(message_id: int, request: Request, filename: str = "", tok
         end = min(end, file_size - 1)
 
     total_to_send = (end - start) + 1 if file_size > 0 else 0
-    disposition = "inline"
+    is_download = (dl == 1 or request.query_params.get("dl") == "1")
+    disposition = "attachment" if is_download else "inline"
 
     safe_ascii_name = file_name.encode("ascii", "ignore").decode("ascii").replace('"', '').strip() or f"file_{message_id}"
     quoted_utf8_name = urllib.parse.quote(file_name)
