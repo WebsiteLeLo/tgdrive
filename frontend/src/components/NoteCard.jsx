@@ -6,13 +6,6 @@ export default function NoteCard({ file }) {
   const watchUrl = `/watch/${encodeURIComponent(file.share_token)}`;
   const downloadUrl = `/stream/${file.message_id}/${encodeURIComponent(file.name)}?token=${encodeURIComponent(file.share_token)}&dl=1`;
   const ext = (getFileExtension(file.name) || 'PDF').toUpperCase();
-  
-  const parts = (file.folder || '').split('/').filter(Boolean);
-  const chapterName = parts.pop() || 'Notes';
-  const subjectName = parts.pop();
-  const badgeText = subjectName && !subjectName.startsWith('@') && !subjectName.includes('_')
-    ? `${subjectName} • ${chapterName}`
-    : chapterName;
 
   return (
     <a 
@@ -35,16 +28,9 @@ export default function NoteCard({ file }) {
           {file.name}
         </h4>
         <div className="flex items-center gap-2 text-xs text-slate-400 flex-wrap">
-          <span 
-            title={badgeText}
-            className="bg-white/5 border border-white/[0.06] px-2 py-0.5 rounded text-[11px] text-slate-300 truncate max-w-[200px]"
-          >
-            {badgeText}
-          </span>
-          <span>•</span>
           <span className="font-mono text-[11px]">{formatBytes(file.size)}</span>
           <span>•</span>
-          <span className="text-[11px] font-semibold text-amber-400/90">{ext}</span>
+          <span className="text-[11px] font-semibold text-amber-400/90">{ext} Document</span>
         </div>
       </div>
 
@@ -54,7 +40,7 @@ export default function NoteCard({ file }) {
           href={downloadUrl}
           download={file.name}
           onClick={(e) => e.stopPropagation()}
-          title="Download PDF"
+          title="Download Document"
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-amber-500 hover:text-slate-950 border border-white/10 text-slate-300 text-xs font-semibold transition-all duration-200 cursor-pointer shadow-sm"
         >
           <Download className="w-3.5 h-3.5" />

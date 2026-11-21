@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Play, FileText, Share2, Check, ChevronRight, X, BookOpen, Atom, Calculator, FlaskConical, ClipboardList, Layers } from 'lucide-react';
+import { Play, FileText, Share2, Check, Layers } from 'lucide-react';
 import VideoCard from './VideoCard';
 import NoteCard from './NoteCard';
 import { getFileTypeInfo, getAdminKey } from '../utils';
@@ -8,45 +8,15 @@ const DEFAULT_BATCHES = [
   { id: 'WlrsaUw7NYmPYcAAkY4', name: 'Lakshya JEE 2026', share_token: 'WlrsaUw7NYmPYcAAkY4', file_count: 2271, video_count: 724, note_count: 1547 },
   { id: 'eMzW9H9d-t8xaLhAUlA', name: 'Prayas JEE 2026', share_token: 'eMzW9H9d-t8xaLhAUlA', file_count: 3295, video_count: 989, note_count: 2306 },
   { id: '9pXtLsCIWWnjY4h_bM0', name: 'Mission 100', share_token: '9pXtLsCIWWnjY4h_bM0', file_count: 247, video_count: 105, note_count: 142 },
+  { id: 'K92_5DCPSjKbMDexkfA', name: 'Parakarm Gate 2.0 2027', share_token: 'K92_5DCPSjKbMDexkfA', file_count: 243, video_count: 105, note_count: 138 },
   { id: 'SaIxigEXZL2a4PHYRY4', name: 'Ashish Sir Lectures', share_token: 'SaIxigEXZL2a4PHYRY4', file_count: 30, video_count: 12, note_count: 18 },
   { id: 'z49kugBAu5ILsSiC6WQ', name: 'Faisal Sir Lectures', share_token: 'z49kugBAu5ILsSiC6WQ', file_count: 22, video_count: 8, note_count: 14 }
 ];
-
-function getSubjectAndChapter(folder, basePath, fileName = '') {
-  let rel = folder || '';
-  const bp = (basePath || '').replace(/\/+$/, '');
-  if (bp && rel.startsWith(bp)) {
-    rel = rel.substring(bp.length);
-  }
-  let parts = rel.split('/').filter(Boolean);
-  if (parts.length >= 3 && (parts[0].startsWith('@') || parts[0] === 'Code')) {
-    parts = parts.slice(2);
-  }
-  let subject = parts[0];
-  let chapter = parts[1];
-
-  if (!subject || subject === 'General') {
-    const fn = (fileName || '').toLowerCase();
-    if (fn.includes('physics') || fn.includes('phy')) subject = 'Physics';
-    else if (fn.includes('chemistry') || fn.includes('chem')) subject = 'Chemistry';
-    else if (fn.includes('math') || fn.includes('mathematics')) subject = 'Mathematics';
-    else if (fn.includes('test') || fn.includes('aits') || fn.includes('dpp') || fn.includes('result') || fn.includes('contest') || fn.includes('update') || fn.includes('notice')) subject = 'Tests & Guidance';
-    else subject = 'General Materials';
-  }
-
-  if (!chapter) {
-    chapter = 'General Lectures & Material';
-  }
-
-  return { subject, chapter };
-}
 
 export default function CatalogPage({ shareToken, searchQuery }) {
   const [batches, setBatches] = useState(DEFAULT_BATCHES);
   const [activeBatchToken, setActiveBatchToken] = useState(shareToken || 'WlrsaUw7NYmPYcAAkY4');
   const [data, setData] = useState({ files: [], subfolders: [], stats: {}, base_path: '/', folder_name: '' });
-  const [selectedSubject, setSelectedSubject] = useState('All');
-  const [selectedChapter, setSelectedChapter] = useState('All');
   const [currentSection, setCurrentSection] = useState('videos'); // 'videos' or 'notes'
   const [sortBy, setSortBy] = useState('name-asc');
   const [loading, setLoading] = useState(true);
@@ -118,91 +88,21 @@ export default function CatalogPage({ shareToken, searchQuery }) {
   const handleSwitchBatch = (token) => {
     if (token === activeBatchToken) return;
     setActiveBatchToken(token);
-    setSelectedSubject('All');
-    setSelectedChapter('All');
     setVisibleCount(36);
     window.history.pushState(null, '', `/share/${token}`);
   };
 
-  // Extract Subject and Chapter mappings and counts
-  const { subjects, chaptersBySubject, subjectCounts, chapterCounts } = useMemo(() => {
-    const subjMap = {};
-    const sCounts = { All: (data.files || []).length };
-    const cCounts = {};
-
-    (data.files || []).forEach(f => {
-      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path, f.name);
-
-      if (!subjMap[subject]) {
-        subjMap[subject] = new Set();
-      }
-      subjMap[subject].add(chapter);
-
-      sCounts[subject] = (sCounts[subject] || 0) + 1;
-      
-      const chKey = `${subject}::${chapter}`;
-      cCounts[chKey] = (cCounts[chKey] || 0) + 1;
-    });
-
-    const standardOrder = ['Physics', 'Chemistry', 'Mathematics', 'Tests & Guidance'];
-    const subjectList = Object.keys(subjMap).sort((a, b) => {
-      const idxA = standardOrder.indexOf(a);
-      const idxB = standardOrder.indexOf(b);
-      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-      if (idxA !== -1) return -1;
-      if (idxB !== -1) return 1;
-      return a.localeCompare(b);
-    });
-
-    const chMap = {};
-    subjectList.forEach(s => {
-      chMap[s] = Array.from(subjMap[s]).sort((a, b) => a.localeCompare(b));
-    });
-
-    return { 
-      subjects: subjectList, 
-      chaptersBySubject: chMap,
-      subjectCounts: sCounts,
-      chapterCounts: cCounts
-    };
-  }, [data.files, data.base_path]);
-
-  // Available chapters for currently selected subject
-  const currentChapterList = useMemo(() => {
-    if (selectedSubject === 'All') {
-      const allChs = new Set();
-      Object.values(chaptersBySubject).forEach(list => list.forEach(ch => allChs.add(ch)));
-      return Array.from(allChs).sort((a, b) => a.localeCompare(b));
-    }
-    return chaptersBySubject[selectedSubject] || [];
-  }, [selectedSubject, chaptersBySubject]);
-
-  // Filter files by Subject & Chapter first
-  const subjectFilteredFiles = useMemo(() => {
-    return (data.files || []).filter(f => {
-      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path, f.name);
-
-      if (selectedSubject !== 'All' && subject !== selectedSubject) {
-        return false;
-      }
-      if (selectedChapter !== 'All' && chapter !== selectedChapter) {
-        return false;
-      }
-      return true;
-    });
-  }, [data.files, data.base_path, selectedSubject, selectedChapter]);
-
-  // Separate Videos and Notes in current view
+  // Separate Videos and Notes in current batch
   const { allVideos, allNotes } = useMemo(() => {
     const vids = [];
     const notes = [];
-    subjectFilteredFiles.forEach(f => {
+    (data.files || []).forEach(f => {
       const type = getFileTypeInfo(f.mime_type, f.name);
       if (type.isVideo) vids.push(f);
       else notes.push(f);
     });
     return { allVideos: vids, allNotes: notes };
-  }, [subjectFilteredFiles]);
+  }, [data.files]);
 
   // Search & Sort applied to current section
   const filteredFiles = useMemo(() => {
@@ -211,7 +111,7 @@ export default function CatalogPage({ shareToken, searchQuery }) {
 
     // In-memory instant search (<1ms)
     if (q) {
-      list = list.filter(f => f.name.toLowerCase().includes(q) || f.folder.toLowerCase().includes(q));
+      list = list.filter(f => f.name.toLowerCase().includes(q));
     }
 
     // Sort
@@ -228,13 +128,7 @@ export default function CatalogPage({ shareToken, searchQuery }) {
   // Reset pagination count on filter change
   useEffect(() => {
     setVisibleCount(36);
-  }, [searchQuery, currentSection, selectedSubject, selectedChapter, sortBy]);
-
-  // Reset chapter selection if subject changes
-  const handleSelectSubject = (s) => {
-    setSelectedSubject(s);
-    setSelectedChapter('All');
-  };
+  }, [searchQuery, currentSection, sortBy, activeBatchToken]);
 
   // Infinite Scroll IntersectionObserver
   useEffect(() => {
@@ -256,16 +150,6 @@ export default function CatalogPage({ shareToken, searchQuery }) {
     navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const getSubjectIcon = (subj) => {
-    switch (subj) {
-      case 'Physics': return <Atom className="w-3.5 h-3.5" />;
-      case 'Chemistry': return <FlaskConical className="w-3.5 h-3.5" />;
-      case 'Mathematics': return <Calculator className="w-3.5 h-3.5" />;
-      case 'Tests & Guidance': return <ClipboardList className="w-3.5 h-3.5" />;
-      default: return <BookOpen className="w-3.5 h-3.5" />;
-    }
   };
 
   const currentBatchMeta = batches.find(b => b.share_token === activeBatchToken);
@@ -373,153 +257,7 @@ export default function CatalogPage({ shareToken, searchQuery }) {
         </div>
       </div>
 
-      {/* 1. PRIMARY SUBJECT TABS (Subject Level Navigation) */}
-      <div className="mb-4">
-        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2 flex items-center gap-1.5">
-          <span>Subjects</span>
-        </div>
-        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin">
-          <button
-            onClick={() => handleSelectSubject('All')}
-            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition border cursor-pointer ${
-              selectedSubject === 'All'
-                ? 'bg-sky-500 text-slate-950 border-sky-400 shadow-md shadow-sky-500/20 font-bold'
-                : 'bg-slate-900/80 border-white/10 text-slate-300 hover:text-white hover:bg-slate-800'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>All Subjects</span>
-            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${selectedSubject === 'All' ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-white/10 text-slate-400'}`}>
-              {subjectCounts.All || 0}
-            </span>
-          </button>
-
-          {subjects.map(s => {
-            const count = subjectCounts[s] || 0;
-            const isActive = selectedSubject === s;
-            return (
-              <button
-                key={s}
-                onClick={() => handleSelectSubject(s)}
-                className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition border cursor-pointer ${
-                  isActive
-                    ? 'bg-sky-500 text-slate-950 border-sky-400 shadow-md shadow-sky-500/20 font-bold'
-                    : 'bg-slate-900/80 border-white/10 text-slate-300 hover:text-white hover:bg-slate-800'
-                }`}
-              >
-                {getSubjectIcon(s)}
-                <span>{s}</span>
-                <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${isActive ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-white/10 text-slate-400'}`}>
-                  {count}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* 2. CHAPTER FILTER PILLS (Chapter Level Navigation) */}
-      {currentChapterList.length > 0 && (
-        <div className="mb-6 bg-slate-950/40 border border-white/[0.06] rounded-2xl p-3 sm:p-4">
-          <div className="flex items-center justify-between gap-2 mb-2.5">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <span>Chapters {selectedSubject !== 'All' ? `in ${selectedSubject}` : ''}</span>
-              <span className="text-slate-500">({currentChapterList.length})</span>
-            </div>
-
-            {selectedChapter !== 'All' && (
-              <button
-                onClick={() => setSelectedChapter('All')}
-                className="text-[11px] text-sky-400 hover:text-sky-300 inline-flex items-center gap-1 font-medium cursor-pointer"
-              >
-                <span>Reset Chapter</span>
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
-            <button
-              onClick={() => setSelectedChapter('All')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition border cursor-pointer ${
-                selectedChapter === 'All'
-                  ? 'bg-white/15 border-white/30 text-white font-semibold'
-                  : 'bg-slate-900/60 border-white/5 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-              }`}
-            >
-              All Chapters
-            </button>
-
-            {currentChapterList.map(ch => {
-              const isActive = selectedChapter === ch;
-              const chCount = selectedSubject !== 'All' 
-                ? (chapterCounts[`${selectedSubject}::${ch}`] || 0)
-                : Object.keys(chaptersBySubject).reduce((acc, subj) => acc + (chapterCounts[`${subj}::${ch}`] || 0), 0);
-
-              return (
-                <button
-                  key={ch}
-                  onClick={() => setSelectedChapter(ch)}
-                  className={`px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition border cursor-pointer inline-flex items-center gap-1.5 ${
-                    isActive
-                      ? 'bg-sky-500/20 border-sky-500/60 text-sky-300 font-semibold shadow-sm'
-                      : 'bg-slate-900/60 border-white/5 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                  }`}
-                >
-                  <span>{ch}</span>
-                  {chCount > 0 && (
-                    <span className="text-[10px] text-slate-500 font-mono">
-                      {chCount}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* 3. ACTIVE NAVIGATION BREADCRUMB */}
-      {(selectedSubject !== 'All' || selectedChapter !== 'All') && (
-        <div className="flex items-center gap-2 text-xs text-slate-400 mb-5 flex-wrap">
-          <span className="text-slate-500">Browsing:</span>
-          <button 
-            onClick={() => { setSelectedSubject('All'); setSelectedChapter('All'); }}
-            className="text-slate-300 hover:text-white underline cursor-pointer"
-          >
-            All Subjects
-          </button>
-          
-          {selectedSubject !== 'All' && (
-            <>
-              <ChevronRight className="w-3 h-3 text-slate-600" />
-              <button 
-                onClick={() => setSelectedChapter('All')}
-                className={`cursor-pointer ${selectedChapter === 'All' ? 'text-sky-400 font-semibold' : 'text-slate-300 hover:text-white underline'}`}
-              >
-                {selectedSubject}
-              </button>
-            </>
-          )}
-
-          {selectedChapter !== 'All' && (
-            <>
-              <ChevronRight className="w-3 h-3 text-slate-600" />
-              <span className="text-sky-400 font-semibold">{selectedChapter}</span>
-            </>
-          )}
-
-          <button
-            onClick={() => { setSelectedSubject('All'); setSelectedChapter('All'); }}
-            className="ml-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-[11px] text-slate-300 transition cursor-pointer"
-          >
-            <span>Clear Filter</span>
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
-
-      {/* 4. SEGMENTED SWITCHER: Video Lectures vs Notes & DPPs */}
+      {/* SEGMENTED SWITCHER: Video Lectures vs Notes & DPPs */}
       <div className="flex items-center justify-between flex-wrap gap-4 mb-6">
         <div className="flex items-center p-1 bg-slate-900/90 border border-white/10 rounded-2xl w-fit shadow-inner">
           <button 
@@ -559,7 +297,7 @@ export default function CatalogPage({ shareToken, searchQuery }) {
         </span>
       </div>
 
-      {/* 5. GRID CONTENT */}
+      {/* GRID CONTENT */}
       {visibleBatch.length === 0 ? (
         <div className="py-20 text-center bg-[#111726] border border-white/[0.06] rounded-2xl">
           <h3 className="text-base font-bold text-white mb-1">
@@ -567,8 +305,8 @@ export default function CatalogPage({ shareToken, searchQuery }) {
           </h3>
           <p className="text-xs text-slate-400 max-w-md mx-auto">
             {searchQuery 
-              ? `No matches for "${searchQuery}" in this category.` 
-              : `There are no ${currentSection === 'videos' ? 'video lectures' : 'notes & study materials'} for this selection.`}
+              ? `No matches for "${searchQuery}".` 
+              : `There are no ${currentSection === 'videos' ? 'video lectures' : 'notes & study materials'} in this batch.`}
           </p>
         </div>
       ) : (
@@ -586,7 +324,7 @@ export default function CatalogPage({ shareToken, searchQuery }) {
         </div>
       )}
 
-      {/* 6. INFINITE SCROLL SENTINEL */}
+      {/* INFINITE SCROLL SENTINEL */}
       <div ref={sentinelRef} className="py-8 flex items-center justify-center text-xs text-slate-500">
         {visibleCount < filteredFiles.length ? (
           <span className="inline-flex items-center gap-2">

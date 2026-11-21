@@ -5,13 +5,6 @@ import { formatBytes } from '../utils';
 export default function VideoCard({ file }) {
   const thumbUrl = `/thumb/${file.message_id}?token=${encodeURIComponent(file.share_token)}`;
   const watchUrl = `/watch/${encodeURIComponent(file.share_token)}`;
-  
-  const parts = (file.folder || '').split('/').filter(Boolean);
-  const chapterName = parts.pop() || 'General';
-  const subjectName = parts.pop();
-  const badgeText = subjectName && !subjectName.startsWith('@') && !subjectName.includes('_')
-    ? `${subjectName} • ${chapterName}`
-    : chapterName;
 
   return (
     <a 
@@ -54,11 +47,8 @@ export default function VideoCard({ file }) {
         </h4>
 
         <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-white/[0.04]">
-          <span 
-            title={badgeText}
-            className="bg-white/5 border border-white/[0.06] px-2 py-0.5 rounded text-[11px] text-slate-300 truncate max-w-[170px]"
-          >
-            {badgeText}
+          <span className="bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 rounded text-[11px] text-sky-400 font-medium">
+            Lecture
           </span>
           <span className="inline-flex items-center gap-1 text-slate-400 group-hover:text-sky-400 text-[11px] font-medium transition-colors">
             <span>Watch</span>
