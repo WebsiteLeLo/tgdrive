@@ -856,6 +856,82 @@ class CloneSession:
 
 active_clones: dict[int, CloneSession] = {}
 
+async def probe_channel_chunk(chat_id, p: int):
+    chunk = list(range(max(1, p - 19), p + 1))
+    try:
+        msgs = await bot.get_messages(chat_id, chunk)
+        valid = [m.id for m in msgs if m and not m.empty]
+        return p, valid
+    except Exception:
+        return p, []
+
+async def fast_detect_range(chat_id) -> tuple[int, int]:
+    try:
+        chat = await bot.get_chat(chat_id)
+        hint = chat.pinned_message.id if chat.pinned_message else 1
+    except Exception:
+        hint = 1
+
+    checkpoints = [100000, 50000, 25000, 10000, 5000, 3000, 2000, 1000, 500, 200, 100]
+    if hint > 1:
+        checkpoints.append(hint)
+    checkpoints = sorted(list(set(checkpoints)), reverse=True)
+
+    tasks = [probe_channel_chunk(chat_id, cp) for cp in checkpoints]
+    results = await asyncio.gather(*tasks)
+
+    valid_points = [p for p, val in results if val]
+    if not valid_points:
+        try:
+            init_msgs = await bot.get_messages(chat_id, list(range(1, 51)))
+            init_val = [m.id for m in init_msgs if m and not m.empty]
+            if init_val:
+                return min(init_val), max(init_val)
+        except Exception:
+            pass
+        return 1, hint or 1
+
+    max_p = max(valid_points)
+    min_p = min(valid_points)
+
+    # Binary search for exact max
+    low = max_p
+    high = max_p + 3500
+    exact_max = max_p
+    while low <= high:
+        mid = (low + high) // 2
+        chunk = list(range(mid, min(mid + 15, high + 1)))
+        try:
+            msgs = await bot.get_messages(chat_id, chunk)
+            val = [m.id for m in msgs if m and not m.empty]
+            if val:
+                exact_max = max(exact_max, max(val))
+                low = max(val) + 1
+            else:
+                high = mid - 1
+        except Exception:
+            high = mid - 1
+
+    # Binary search for exact min
+    low = 1
+    high = min_p
+    exact_min = min_p
+    while low <= high:
+        mid = (low + high) // 2
+        chunk = list(range(mid, min(mid + 15, high + 1)))
+        try:
+            msgs = await bot.get_messages(chat_id, chunk)
+            val = [m.id for m in msgs if m and not m.empty]
+            if val:
+                exact_min = min(val)
+                high = mid - 1
+            else:
+                low = mid + 15
+        except Exception:
+            low = mid + 15
+
+    return exact_min, exact_max
+
 async def execute_channel_clone(session: CloneSession, user: dict):
     user_id = session.user_id
     source_chat = session.source_chat
@@ -905,12 +981,36 @@ async def execute_channel_clone(session: CloneSession, user: dict):
         rel_folder = get_relative_folder_name(target_folder, user["base_folder"])
         dest_title = f"Web Drive ({rel_folder})"
 
-    curr_id = start_id
+    # Auto-detect channel range if end_id not provided
+    if not end_id:
+        if status_msg:
+            await edit_text_safe(
+                status_msg,
+                f"🔍 **Scanning Channel Structure...**\n\n"
+                f"📡 **Source:** `{source_title}`\n"
+                f"🎯 **Target:** `{dest_title}`\n\n"
+                "⏳ Finding files and active message range in channel...",
+                reply_markup=stop_markup
+            )
+        try:
+            auto_min, auto_max = await fast_detect_range(source_chat)
+            if start_id == 1 and auto_min > 1:
+                curr_id = auto_min
+            else:
+                curr_id = start_id
+            end_id = auto_max
+        except Exception as e:
+            print(f"[fast_detect_range error] {e}")
+            curr_id = start_id
+            end_id = None
+    else:
+        curr_id = start_id
+
     batch_size = 50
     consecutive_empty_batches = 0
-    max_empty_batches = 3
+    max_empty_batches = 10
     last_edit_time = time.time()
-    total_to_scan = (end_id - start_id + 1) if end_id else None
+    total_to_scan = (end_id - curr_id + 1) if end_id else None
 
     while session.is_running:
         if end_id and curr_id > end_id:
