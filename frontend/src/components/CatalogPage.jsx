@@ -1,10 +1,18 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Play, FileText, Share2, Check, ChevronRight, X, Sparkles, BookOpen, Atom, Calculator, FlaskConical, ClipboardList } from 'lucide-react';
+import { Play, FileText, Share2, Check, ChevronRight, X, BookOpen, Atom, Calculator, FlaskConical, ClipboardList, Layers } from 'lucide-react';
 import VideoCard from './VideoCard';
 import NoteCard from './NoteCard';
 import { getFileTypeInfo, getAdminKey } from '../utils';
 
-function getSubjectAndChapter(folder, basePath) {
+const DEFAULT_BATCHES = [
+  { id: 'WlrsaUw7NYmPYcAAkY4', name: 'Lakshya JEE 2026', share_token: 'WlrsaUw7NYmPYcAAkY4', file_count: 2271, video_count: 724, note_count: 1547 },
+  { id: 'eMzW9H9d-t8xaLhAUlA', name: 'Prayas JEE 2026', share_token: 'eMzW9H9d-t8xaLhAUlA', file_count: 3295, video_count: 989, note_count: 2306 },
+  { id: '9pXtLsCIWWnjY4h_bM0', name: 'Mission 100', share_token: '9pXtLsCIWWnjY4h_bM0', file_count: 247, video_count: 105, note_count: 142 },
+  { id: 'SaIxigEXZL2a4PHYRY4', name: 'Ashish Sir Lectures', share_token: 'SaIxigEXZL2a4PHYRY4', file_count: 30, video_count: 12, note_count: 18 },
+  { id: 'z49kugBAu5ILsSiC6WQ', name: 'Faisal Sir Lectures', share_token: 'z49kugBAu5ILsSiC6WQ', file_count: 22, video_count: 8, note_count: 14 }
+];
+
+function getSubjectAndChapter(folder, basePath, fileName = '') {
   let rel = folder || '';
   const bp = (basePath || '').replace(/\/+$/, '');
   if (bp && rel.startsWith(bp)) {
@@ -14,12 +22,28 @@ function getSubjectAndChapter(folder, basePath) {
   if (parts.length >= 3 && (parts[0].startsWith('@') || parts[0] === 'Code')) {
     parts = parts.slice(2);
   }
-  const subject = parts[0] || 'General';
-  const chapter = parts[1] || 'General Materials';
+  let subject = parts[0];
+  let chapter = parts[1];
+
+  if (!subject || subject === 'General') {
+    const fn = (fileName || '').toLowerCase();
+    if (fn.includes('physics') || fn.includes('phy')) subject = 'Physics';
+    else if (fn.includes('chemistry') || fn.includes('chem')) subject = 'Chemistry';
+    else if (fn.includes('math') || fn.includes('mathematics')) subject = 'Mathematics';
+    else if (fn.includes('test') || fn.includes('aits') || fn.includes('dpp') || fn.includes('result') || fn.includes('contest') || fn.includes('update') || fn.includes('notice')) subject = 'Tests & Guidance';
+    else subject = 'General Materials';
+  }
+
+  if (!chapter) {
+    chapter = 'General Lectures & Material';
+  }
+
   return { subject, chapter };
 }
 
 export default function CatalogPage({ shareToken, searchQuery }) {
+  const [batches, setBatches] = useState(DEFAULT_BATCHES);
+  const [activeBatchToken, setActiveBatchToken] = useState(shareToken || 'WlrsaUw7NYmPYcAAkY4');
   const [data, setData] = useState({ files: [], subfolders: [], stats: {}, base_path: '/', folder_name: '' });
   const [selectedSubject, setSelectedSubject] = useState('All');
   const [selectedChapter, setSelectedChapter] = useState('All');
@@ -32,29 +56,73 @@ export default function CatalogPage({ shareToken, searchQuery }) {
 
   const sentinelRef = useRef(null);
 
+  // Sync prop changes
   useEffect(() => {
+    if (shareToken && shareToken !== activeBatchToken) {
+      setActiveBatchToken(shareToken);
+    }
+  }, [shareToken]);
+
+  // Fetch live batches from backend
+  useEffect(() => {
+    async function fetchBatches() {
+      try {
+        const res = await fetch('/api/batches');
+        if (res.ok) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0) {
+            setBatches(list);
+          }
+        }
+      } catch (e) {
+        // Fallback to DEFAULT_BATCHES
+      }
+    }
+    fetchBatches();
+  }, []);
+
+  // Fetch materials strictly for the active batch (Batch Isolation)
+  useEffect(() => {
+    const tokenToLoad = activeBatchToken || shareToken || 'WlrsaUw7NYmPYcAAkY4';
+    let isMounted = true;
+
     async function fetchData() {
       setLoading(true);
       setError(null);
       try {
         const adminKey = getAdminKey();
         const headers = adminKey ? { 'x-auth': adminKey } : {};
-        const url = shareToken 
-          ? `/api/share/${encodeURIComponent(shareToken)}?all_files=true`
-          : `/api/files?folder=${encodeURIComponent('/')}&all_files=true`;
+        const url = `/api/share/${encodeURIComponent(tokenToLoad)}?all_files=true`;
         
         const res = await fetch(url, { headers });
         if (!res.ok) throw new Error('Failed to load course materials');
         const json = await res.json();
-        setData(json);
+        if (isMounted) {
+          setData(json);
+        }
       } catch (err) {
-        setError(err.message);
+        if (isMounted) {
+          setError(err.message);
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     }
     fetchData();
-  }, [shareToken]);
+
+    return () => { isMounted = false; };
+  }, [activeBatchToken]);
+
+  const handleSwitchBatch = (token) => {
+    if (token === activeBatchToken) return;
+    setActiveBatchToken(token);
+    setSelectedSubject('All');
+    setSelectedChapter('All');
+    setVisibleCount(36);
+    window.history.pushState(null, '', `/share/${token}`);
+  };
 
   // Extract Subject and Chapter mappings and counts
   const { subjects, chaptersBySubject, subjectCounts, chapterCounts } = useMemo(() => {
@@ -63,7 +131,7 @@ export default function CatalogPage({ shareToken, searchQuery }) {
     const cCounts = {};
 
     (data.files || []).forEach(f => {
-      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path);
+      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path, f.name);
 
       if (!subjMap[subject]) {
         subjMap[subject] = new Set();
@@ -112,7 +180,7 @@ export default function CatalogPage({ shareToken, searchQuery }) {
   // Filter files by Subject & Chapter first
   const subjectFilteredFiles = useMemo(() => {
     return (data.files || []).filter(f => {
-      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path);
+      const { subject, chapter } = getSubjectAndChapter(f.folder, data.base_path, f.name);
 
       if (selectedSubject !== 'All' && subject !== selectedSubject) {
         return false;
@@ -184,7 +252,8 @@ export default function CatalogPage({ shareToken, searchQuery }) {
   }, [visibleCount, filteredFiles.length]);
 
   const handleShareSeries = () => {
-    navigator.clipboard.writeText(window.location.href);
+    const url = `${window.location.origin}/share/${activeBatchToken}`;
+    navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -199,7 +268,8 @@ export default function CatalogPage({ shareToken, searchQuery }) {
     }
   };
 
-  const courseTitle = data.folder_name || (data.base_path === '/' ? 'Study Materials' : (data.base_path || '').split('/').filter(Boolean).pop()) || 'Series Portal';
+  const currentBatchMeta = batches.find(b => b.share_token === activeBatchToken);
+  const courseTitle = currentBatchMeta?.name || data.folder_name || (data.base_path === '/' ? 'Study Materials' : (data.base_path || '').split('/').filter(Boolean).pop()) || 'Series Portal';
   const visibleBatch = filteredFiles.slice(0, visibleCount);
 
   if (loading && (!data.files || data.files.length === 0)) {
@@ -225,6 +295,43 @@ export default function CatalogPage({ shareToken, searchQuery }) {
 
   return (
     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      {/* Batch / Course Series Selector */}
+      <div className="mb-6 bg-slate-950/60 border border-white/[0.08] rounded-2xl p-3 sm:p-4">
+        <div className="flex items-center justify-between gap-2 mb-2.5">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-2">
+            <Layers className="w-3.5 h-3.5 text-sky-400" />
+            <span>Select Batch Series</span>
+          </div>
+          <span className="text-[11px] text-slate-500 hidden sm:inline">
+            Each batch is isolated with its own lectures and notes
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+          {batches.map(b => {
+            const isActive = activeBatchToken === b.share_token;
+            return (
+              <button
+                key={b.share_token}
+                onClick={() => handleSwitchBatch(b.share_token)}
+                className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold whitespace-nowrap transition-all border cursor-pointer ${
+                  isActive
+                    ? 'bg-sky-500/20 border-sky-400 text-white shadow-md shadow-sky-500/15 font-bold ring-1 ring-sky-400/40'
+                    : 'bg-slate-900/80 border-white/10 text-slate-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <span>{b.name}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono ${
+                  isActive ? 'bg-sky-400 text-slate-950 font-bold' : 'bg-white/10 text-slate-400'
+                }`}>
+                  {b.file_count || 0}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Course Minimalist Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 mb-6 border-b border-white/[0.08]">
         <div>

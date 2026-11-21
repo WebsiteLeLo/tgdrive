@@ -2298,6 +2298,57 @@ async def regenerate_folder_token_api(request: Request, x_auth: str = Header("")
     conn.close()
     return {"path": path, "share_token": new_token, "share_url": f"/share/{new_token}"}
 
+@app.api_route("/api/batches", methods=["GET", "HEAD"])
+async def get_batches_api():
+    conn = sqlite3.connect("drive.db")
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT f.path, f.share_token, 
+               (SELECT count(*) FROM files WHERE folder = f.path OR folder LIKE f.path || '/%') as file_count,
+               (SELECT count(*) FROM files WHERE (folder = f.path OR folder LIKE f.path || '/%') AND mime_type LIKE 'video/%') as video_count,
+               (SELECT count(*) FROM files WHERE (folder = f.path OR folder LIKE f.path || '/%') AND mime_type NOT LIKE 'video/%') as note_count
+        FROM folders f
+    """)
+    all_f = [dict(r) for r in c.fetchall() if r["file_count"] > 0]
+    conn.close()
+
+    excluded_paths = {'/', '/Code', '/Code/tg-drive', '/Code/tg-drive/templates', '/@gouravpwx', '/@gouravpwx/PW'}
+    excluded_names = {'Physics', 'Chemistry', 'Mathematics', 'Tests & Guidance'}
+
+    batches = []
+    for f in all_f:
+        p = f["path"]
+        name = p.split("/")[-1]
+        if p in excluded_paths or name in excluded_names:
+            continue
+        parts = [part for part in p.split("/") if part]
+        if len(parts) > 2 and parts[1] == "Lakshya_JEE_2026":
+            continue
+        
+        clean_name = name.replace("_", " ")
+        batches.append({
+            "id": f["share_token"],
+            "name": clean_name,
+            "path": p,
+            "share_token": f["share_token"],
+            "file_count": f["file_count"],
+            "video_count": f["video_count"],
+            "note_count": f["note_count"],
+            "url": f"/share/{f['share_token']}"
+        })
+
+    def batch_sort_key(b):
+        p = b["path"]
+        if "Lakshya_JEE_2026" in p:
+            return (0, -b["file_count"])
+        if "Prayas_JEE_2026" in p:
+            return (1, -b["file_count"])
+        return (2, -b["file_count"])
+
+    batches.sort(key=batch_sort_key)
+    return batches
+
 @app.api_route("/api/share/{token}", methods=["GET", "HEAD"])
 async def get_shared_folder_files(token: str, subfolder: str = "", all_files: bool = False):
     conn = sqlite3.connect("drive.db")
